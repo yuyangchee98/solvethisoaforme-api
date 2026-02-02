@@ -217,7 +217,8 @@ def analyze_claims(request: AnalyzeClaimsRequest):
         inherited = collect_inherited_terms(claim.number, claims_map, intro_cache)
 
         # Separate introductions and references
-        introductions = [np for np in nps if np.type == "introduction"]
+        # Include both "introduction" (a/an) and "bare" (no determiner) as introductions
+        introductions = [np for np in nps if np.type in ("introduction", "bare")]
         references = [np for np in nps if np.type == "reference"]
 
         # Check for antecedent errors
