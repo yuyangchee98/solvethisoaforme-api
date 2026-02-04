@@ -1,10 +1,11 @@
 """FastAPI router for agent session endpoints."""
 
+import json
 import re
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from sessions import (
     get_session_manager,
@@ -19,6 +20,7 @@ from sessions import (
     UploadedDocumentResponse,
     WorkspaceFilesResponse,
 )
+from .orchestrator import run_orchestrator_turn
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -105,7 +107,7 @@ async def delete_session(session_id: str):
     return DeleteSessionResponse(status="deleted")
 
 
-@router.post("/sessions/{session_id}/messages", response_model=MessageResponse)
+@router.post("/sessions/{session_id}/messages")
 async def send_message(
     session_id: str,
     content: str = Form(...),
@@ -113,10 +115,15 @@ async def send_message(
 ):
     """Send a message to a session, optionally with file attachments.
 
+    Returns an SSE stream of agent response events.
+
     Args:
         session_id: The session ID
         content: The message content
         attachments: Optional list of file attachments
+
+    Returns:
+        StreamingResponse with SSE events
     """
     manager = get_session_manager()
 
@@ -125,11 +132,10 @@ async def send_message(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Save the message
+    # Save the user message
     message = await manager.save_message(session_id, MessageRole.USER, content)
 
     # Process attachments
-    uploaded_docs = []
     workspace = manager.get_workspace_path(session_id)
     input_dir = workspace / "input"
 
@@ -144,7 +150,7 @@ async def send_message(
             file_path.write_bytes(file_content)
 
             # Save document metadata
-            doc = await manager.save_uploaded_document(
+            await manager.save_uploaded_document(
                 session_id=session_id,
                 message_id=message.id,
                 filename=safe_filename,
@@ -153,24 +159,33 @@ async def send_message(
                 file_path=str(file_path),
                 file_size=len(file_content),
             )
-            uploaded_docs.append(doc)
 
-    return MessageResponse(
-        id=message.id,
-        role=message.role,
-        content=message.content,
-        created_at=message.created_at,
-        attachments=[
-            UploadedDocumentResponse(
-                id=doc.id,
-                filename=doc.filename,
-                original_filename=doc.original_filename,
-                document_type=doc.document_type,
-                file_size=doc.file_size,
-                created_at=doc.created_at,
+    # Get conversation history for context
+    history = await manager.get_conversation_history(session_id)
+
+    async def event_stream():
+        """Generate SSE events from the orchestrator."""
+        full_response = ""
+
+        async for event in run_orchestrator_turn(workspace, history, content):
+            if event["type"] == "text":
+                full_response += event["content"]
+            yield f"data: {json.dumps(event)}\n\n"
+
+        # Save assistant response after streaming completes
+        if full_response:
+            await manager.save_message(
+                session_id, MessageRole.ASSISTANT, full_response
             )
-            for doc in uploaded_docs
-        ],
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
