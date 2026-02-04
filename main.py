@@ -5,14 +5,32 @@ Extracts noun phrases, identifies introductions/references,
 and checks antecedent basis using spaCy.
 """
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import AnalyzeClaimsRequest, AnalyzeClaimsResponse
 from core.analyzer import ClaimAnalyzer, register_default_validators
+from sessions import init_db, close_db
+from agents import agents_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifespan events."""
+    # Startup
+    register_default_validators()
+    await init_db()
+
+    yield
+
+    # Shutdown
+    await close_db()
+
 
 # Initialize FastAPI app
-app = FastAPI(title="Patent Claim NLP API")
+app = FastAPI(title="Patent Claim NLP API", lifespan=lifespan)
 
 # Allow CORS for webapp
 app.add_middleware(
@@ -22,8 +40,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register all validators at startup
-register_default_validators()
+# Include agent router
+app.include_router(agents_router)
 
 # Initialize analyzer
 analyzer = ClaimAnalyzer()
