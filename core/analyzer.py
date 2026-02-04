@@ -84,6 +84,7 @@ def register_default_validators() -> None:
         SuchPhraseValidator,
         AntecedentValidator,
         PrepositionalScopeValidator,
+        ReintroductionValidator,
     )
 
     registry = get_registry()
@@ -91,3 +92,4 @@ def register_default_validators() -> None:
     registry.register(SuchPhraseValidator())
     registry.register(AntecedentValidator())
     registry.register(PrepositionalScopeValidator())
+    registry.register(ReintroductionValidator())

@@ -5,6 +5,7 @@ from .pronoun_validator import PronounValidator
 from .such_phrase_validator import SuchPhraseValidator
 from .antecedent_validator import AntecedentValidator
 from .prepositional_scope_validator import PrepositionalScopeValidator
+from .reintroduction_validator import ReintroductionValidator
 
 __all__ = [
     "BaseValidator",
@@ -13,4 +14,5 @@ __all__ = [
     "SuchPhraseValidator",
     "AntecedentValidator",
     "PrepositionalScopeValidator",
+    "ReintroductionValidator",
 ]
