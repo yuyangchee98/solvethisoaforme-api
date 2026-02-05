@@ -35,7 +35,7 @@ class ChatMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
     parts: list[MessagePart] | None = None
     content: str | None = None  # Fallback for standard format
-    id: str | None = None
+    id: str | int | None = None
     metadata: dict | None = None
 
     def get_text(self) -> str:
@@ -150,9 +150,6 @@ async def send_message(
     Returns:
         StreamingResponse with SSE events
     """
-    print(f"[DEBUG] Received request for session {session_id}")
-    print(f"[DEBUG] Request messages: {request.messages}")
-
     manager = get_session_manager()
 
     # Verify session exists
@@ -166,7 +163,6 @@ async def send_message(
         raise HTTPException(status_code=400, detail="No user message provided")
 
     content = user_messages[-1].get_text()
-    print(f"[DEBUG] Extracted content: {content}")
 
     if not content:
         raise HTTPException(status_code=400, detail="Empty message content")
@@ -176,7 +172,6 @@ async def send_message(
 
     # Get conversation history for context
     history = await manager.get_conversation_history(session_id)
-    print(f"[DEBUG] History length: {len(history)}")
 
     # Get workspace path
     workspace = manager.get_workspace_path(session_id)
@@ -187,17 +182,13 @@ async def send_message(
         message_id = str(uuid_mod.uuid4())
         text_part_id = str(uuid_mod.uuid4())
         full_response = ""
-        chunk_count = 0
         text_started = False
 
         # Start message event
         start_event = {"type": "start", "messageId": message_id}
         yield f"data: {json.dumps(start_event)}\n\n"
-        print(f"[DEBUG] Sent start event: {start_event}")
 
         async for chunk in run_orchestrator_turn(workspace, history, content):
-            chunk_count += 1
-            print(f"[DEBUG] Chunk {chunk_count}: {chunk[:100]}...")
 
             # Parse the data stream format and convert to UI message stream
             if chunk.startswith("0:"):
@@ -228,13 +219,9 @@ async def send_message(
         # Finish message event
         finish_event = {"type": "finish"}
         yield f"data: {json.dumps(finish_event)}\n\n"
-        print(f"[DEBUG] Sent finish event")
 
         # Signal end of stream
         yield "data: [DONE]\n\n"
-
-        print(f"[DEBUG] Stream complete. Total chunks: {chunk_count}")
-        print(f"[DEBUG] Full response length: {len(full_response)}")
 
         # Save assistant response after streaming completes
         if full_response:
