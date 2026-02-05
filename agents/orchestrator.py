@@ -1,5 +1,6 @@
 """Orchestrator agent for patent prosecution assistance."""
 
+import json
 import uuid
 from pathlib import Path
 from typing import AsyncIterator
@@ -60,6 +61,7 @@ async def run_orchestrator_turn(
     # Track current tool call
     current_tool_id: str | None = None
     current_tool_name: str | None = None
+    current_tool_input_json = ""  # Accumulate input JSON delta
 
     try:
         async for message in query(prompt=prompt, options=options):
@@ -79,17 +81,12 @@ async def run_orchestrator_turn(
                         # Tool call starting
                         current_tool_id = content_block.get("id") or f"call_{uuid.uuid4().hex[:8]}"
                         current_tool_name = content_block.get("name")
+                        current_tool_input_json = ""
 
                         yield {
                             "type": "tool-input-start",
                             "toolCallId": current_tool_id,
                             "toolName": current_tool_name,
-                        }
-                        yield {
-                            "type": "tool-input-available",
-                            "toolCallId": current_tool_id,
-                            "toolName": current_tool_name,
-                            "input": {},
                         }
 
                 elif event_type == "content_block_delta":
@@ -106,17 +103,29 @@ async def run_orchestrator_turn(
 
                             yield {"type": "text-delta", "id": text_part_id, "delta": text}
 
+                    elif delta_type == "input_json_delta":
+                        # Accumulate tool input JSON
+                        current_tool_input_json += delta.get("partial_json", "")
+
                 elif event_type == "content_block_stop":
                     # Content block finished
                     if current_tool_id:
-                        # Tool block ended - emit placeholder result
+                        # Parse accumulated input and emit tool-input-available
+                        try:
+                            tool_input = json.loads(current_tool_input_json) if current_tool_input_json else {}
+                        except json.JSONDecodeError:
+                            tool_input = {"raw": current_tool_input_json}
+
                         yield {
-                            "type": "tool-output-available",
+                            "type": "tool-input-available",
                             "toolCallId": current_tool_id,
-                            "output": "completed",
+                            "toolName": current_tool_name,
+                            "input": tool_input,
                         }
+                        # Don't emit output here - wait for ToolResultBlock
                         current_tool_id = None
                         current_tool_name = None
+                        current_tool_input_json = ""
 
             elif isinstance(message, AssistantMessage):
                 # AssistantMessage contains complete content including tool results
