@@ -29,6 +29,12 @@ from .orchestrator import run_orchestrator_turn
 class MessagePart(BaseModel):
     type: str
     text: str | None = None
+    # For image parts
+    image: str | None = None  # base64 encoded image
+    # For file parts
+    data: str | None = None  # base64 encoded file
+    mimeType: str | None = None
+    filename: str | None = None
 
 
 class ChatMessage(BaseModel):
@@ -44,6 +50,12 @@ class ChatMessage(BaseModel):
             texts = [p.text for p in self.parts if p.type == "text" and p.text]
             return " ".join(texts)
         return self.content or ""
+
+    def get_file_parts(self) -> list[MessagePart]:
+        """Extract file/image parts from the message."""
+        if not self.parts:
+            return []
+        return [p for p in self.parts if p.type in ("file", "image")]
 
 
 class ChatRequest(BaseModel):
@@ -162,10 +174,48 @@ async def send_message(
     if not user_messages:
         raise HTTPException(status_code=400, detail="No user message provided")
 
-    content = user_messages[-1].get_text()
+    last_user_message = user_messages[-1]
+    content = last_user_message.get_text()
 
     if not content:
         raise HTTPException(status_code=400, detail="Empty message content")
+
+    # Get workspace path
+    workspace = manager.get_workspace_path(session_id)
+    input_dir = workspace / "input"
+
+    # Process file attachments (base64 encoded)
+    import base64
+    uploaded_filenames = []
+    for part in last_user_message.get_file_parts():
+        filename = part.filename or f"file_{len(uploaded_filenames)}"
+        filename = _sanitize_filename(filename)
+
+        # Decode base64 data
+        if part.type == "image" and part.image:
+            # Image data might have data URL prefix
+            image_data = part.image
+            if "," in image_data:
+                image_data = image_data.split(",", 1)[1]
+            file_content = base64.b64decode(image_data)
+        elif part.type == "file" and part.data:
+            file_data = part.data
+            if "," in file_data:
+                file_data = file_data.split(",", 1)[1]
+            file_content = base64.b64decode(file_data)
+        else:
+            continue
+
+        # Save file to input directory
+        file_path = input_dir / filename
+        file_path.write_bytes(file_content)
+        uploaded_filenames.append(filename)
+
+    # Build message content with file upload notification for the agent
+    agent_content = content
+    if uploaded_filenames:
+        file_list = ", ".join(uploaded_filenames)
+        agent_content = f"[Uploaded files saved to input/: {file_list}]\n\n{content}"
 
     # Save the user message
     await manager.save_message(session_id, MessageRole.USER, content)
@@ -173,52 +223,21 @@ async def send_message(
     # Get conversation history for context
     history = await manager.get_conversation_history(session_id)
 
-    # Get workspace path
-    workspace = manager.get_workspace_path(session_id)
-
     async def event_stream():
-        """Generate UI Message Stream Protocol events."""
+        """Generate SSE events from orchestrator output."""
         import uuid as uuid_mod
         message_id = str(uuid_mod.uuid4())
-        text_part_id = str(uuid_mod.uuid4())
         full_response = ""
-        text_started = False
 
         # Start message event
-        start_event = {"type": "start", "messageId": message_id}
-        yield f"data: {json.dumps(start_event)}\n\n"
+        yield f"data: {json.dumps({'type': 'start', 'messageId': message_id})}\n\n"
 
-        async for chunk in run_orchestrator_turn(workspace, history, content):
+        async for event in run_orchestrator_turn(workspace, history, agent_content):
+            # Accumulate text for saving
+            if event.get("type") == "text-delta":
+                full_response += event.get("delta", "")
 
-            # Parse the data stream format and convert to UI message stream
-            if chunk.startswith("0:"):
-                try:
-                    text = json.loads(chunk[2:].rstrip("\n"))
-                    full_response += text
-
-                    # Send text-start on first text chunk
-                    if not text_started:
-                        text_start = {"type": "text-start", "id": text_part_id}
-                        yield f"data: {json.dumps(text_start)}\n\n"
-                        text_started = True
-
-                    # Send text delta
-                    text_delta = {"type": "text-delta", "id": text_part_id, "delta": text}
-                    yield f"data: {json.dumps(text_delta)}\n\n"
-                except json.JSONDecodeError:
-                    pass
-            elif chunk.startswith("d:"):
-                # Finish event from orchestrator - we'll send our own
-                pass
-
-        # End text part if started
-        if text_started:
-            text_end = {"type": "text-end", "id": text_part_id}
-            yield f"data: {json.dumps(text_end)}\n\n"
-
-        # Finish message event
-        finish_event = {"type": "finish"}
-        yield f"data: {json.dumps(finish_event)}\n\n"
+            yield f"data: {json.dumps(event)}\n\n"
 
         # Signal end of stream
         yield "data: [DONE]\n\n"

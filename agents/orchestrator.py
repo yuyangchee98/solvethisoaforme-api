@@ -1,6 +1,5 @@
 """Orchestrator agent for patent prosecution assistance."""
 
-import json
 import uuid
 from pathlib import Path
 from typing import AsyncIterator
@@ -21,10 +20,10 @@ async def run_orchestrator_turn(
     workspace: Path,
     conversation_history: list[dict],
     user_message: str,
-) -> AsyncIterator[str]:
+) -> AsyncIterator[dict]:
     """Run one turn of the orchestrator agent.
 
-    Yields Vercel AI SDK Text Stream Protocol formatted strings with real-time streaming.
+    Yields UI Message Stream Protocol events directly.
 
     Args:
         workspace: Path to the session workspace directory
@@ -32,12 +31,15 @@ async def run_orchestrator_turn(
         user_message: The new user message to process
 
     Yields:
-        Vercel AI SDK Text Stream Protocol formatted strings:
-        - '0:"text"\n' - text delta (type 0)
-        - '9:{"toolCallId":"x","toolName":"Read","args":{}}\n' - tool call start
-        - 'a:{"toolCallId":"x","result":"..."}\n' - tool result
-        - 'd:{"finishReason":"stop"}\n' - finish
-        - 'e:{"message":"..."}\n' - error
+        UI Message Stream Protocol event dicts:
+        - {"type": "text-start", "id": "..."}
+        - {"type": "text-delta", "id": "...", "delta": "..."}
+        - {"type": "text-end", "id": "..."}
+        - {"type": "tool-input-start", "toolCallId": "...", "toolName": "..."}
+        - {"type": "tool-input-available", "toolCallId": "...", "toolName": "...", "input": {...}}
+        - {"type": "tool-output-available", "toolCallId": "...", "output": "..."}
+        - {"type": "error", "errorText": "..."}
+        - {"type": "finish"}
     """
     # Build the prompt with conversation history
     prompt = _format_prompt(conversation_history, user_message)
@@ -51,7 +53,11 @@ async def run_orchestrator_turn(
         include_partial_messages=True,  # Enable token-level streaming
     )
 
-    # Track current tool call for accumulating input
+    # Track text part state
+    text_part_id = str(uuid.uuid4())
+    text_started = False
+
+    # Track current tool call
     current_tool_id: str | None = None
     current_tool_name: str | None = None
 
@@ -64,36 +70,51 @@ async def run_orchestrator_turn(
                 if event_type == "content_block_start":
                     content_block = event.get("content_block", {})
                     if content_block.get("type") == "tool_use":
+                        # End text part if active before tool call
+                        if text_started:
+                            yield {"type": "text-end", "id": text_part_id}
+                            text_started = False
+                            text_part_id = str(uuid.uuid4())
+
                         # Tool call starting
                         current_tool_id = content_block.get("id") or f"call_{uuid.uuid4().hex[:8]}"
                         current_tool_name = content_block.get("name")
-                        tool_call = {
+
+                        yield {
+                            "type": "tool-input-start",
                             "toolCallId": current_tool_id,
                             "toolName": current_tool_name,
-                            "args": {},
                         }
-                        yield f"9:{json.dumps(tool_call)}\n"
+                        yield {
+                            "type": "tool-input-available",
+                            "toolCallId": current_tool_id,
+                            "toolName": current_tool_name,
+                            "input": {},
+                        }
 
                 elif event_type == "content_block_delta":
                     delta = event.get("delta", {})
                     delta_type = delta.get("type")
 
                     if delta_type == "text_delta":
-                        # Stream text chunk
                         text = delta.get("text", "")
                         if text:
-                            yield f"0:{json.dumps(text)}\n"
+                            # Start text part on first text chunk
+                            if not text_started:
+                                yield {"type": "text-start", "id": text_part_id}
+                                text_started = True
+
+                            yield {"type": "text-delta", "id": text_part_id, "delta": text}
 
                 elif event_type == "content_block_stop":
                     # Content block finished
                     if current_tool_id:
-                        # Emit tool completion when tool block ends
-                        # (Tool is about to execute or just finished)
-                        tool_result = {
+                        # Tool block ended - emit placeholder result
+                        yield {
+                            "type": "tool-output-available",
                             "toolCallId": current_tool_id,
-                            "result": "completed",
+                            "output": "completed",
                         }
-                        yield f"a:{json.dumps(tool_result)}\n"
                         current_tool_id = None
                         current_tool_name = None
 
@@ -101,27 +122,33 @@ async def run_orchestrator_turn(
                 # AssistantMessage contains complete content including tool results
                 for block in message.content:
                     if isinstance(block, ToolResultBlock):
-                        # Emit tool result
                         content = getattr(block, "content", "")
                         if isinstance(content, list):
                             content = " ".join(
                                 str(c.get("text", c)) if isinstance(c, dict) else str(c)
                                 for c in content
                             )
-                        tool_result = {
+                        yield {
+                            "type": "tool-output-available",
                             "toolCallId": block.tool_use_id,
-                            "result": str(content)[:200],  # Truncate for UI
+                            "output": str(content)[:200],  # Truncate for UI
                         }
-                        yield f"a:{json.dumps(tool_result)}\n"
 
             elif isinstance(message, ResultMessage):
-                # Agent finished all work
-                yield 'd:{"finishReason":"stop"}\n'
+                # End text part if still active
+                if text_started:
+                    yield {"type": "text-end", "id": text_part_id}
+                    text_started = False
+
+                yield {"type": "finish"}
 
     except Exception as e:
-        # Type e: error
-        error_data = {"message": f"Agent error: {str(e)}"}
-        yield f"e:{json.dumps(error_data)}\n"
+        # End text part if active before error
+        if text_started:
+            yield {"type": "text-end", "id": text_part_id}
+
+        yield {"type": "error", "errorText": f"Agent error: {str(e)}"}
+        yield {"type": "finish"}
 
 
 def _format_prompt(conversation_history: list[dict], user_message: str) -> str:
