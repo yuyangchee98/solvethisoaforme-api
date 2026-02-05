@@ -7,3 +7,12 @@ env/
 venv/
 ENV/
 .venv
+
+# Database files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Session data
+data/

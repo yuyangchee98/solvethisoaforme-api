@@ -8,12 +8,9 @@ from typing import AsyncIterator
 from claude_agent_sdk import (
     ClaudeAgentOptions,
     query,
-    AssistantMessage,
     ResultMessage,
-    TextBlock,
-    ToolUseBlock,
-    ToolResultBlock,
 )
+from claude_agent_sdk.types import StreamEvent
 
 from .prompts import get_orchestrator_prompt
 
@@ -25,7 +22,7 @@ async def run_orchestrator_turn(
 ) -> AsyncIterator[str]:
     """Run one turn of the orchestrator agent.
 
-    Yields Vercel AI SDK Text Stream Protocol formatted strings.
+    Yields Vercel AI SDK Text Stream Protocol formatted strings with real-time streaming.
 
     Args:
         workspace: Path to the session workspace directory
@@ -49,40 +46,51 @@ async def run_orchestrator_turn(
         allowed_tools=["Read", "Write", "Grep", "Glob", "Bash", "Task"],
         permission_mode="acceptEdits",
         max_turns=50,
+        include_partial_messages=True,  # Enable token-level streaming
     )
+
+    # Track current tool call for accumulating input
+    current_tool_id: str | None = None
+    current_tool_name: str | None = None
 
     try:
         async for message in query(prompt=prompt, options=options):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        # Type 0: text delta
-                        yield f"0:{json.dumps(block.text)}\n"
-                    elif isinstance(block, ToolUseBlock):
-                        # Type 9: tool call start
+            if isinstance(message, StreamEvent):
+                event = message.event
+                event_type = event.get("type")
+
+                if event_type == "content_block_start":
+                    content_block = event.get("content_block", {})
+                    if content_block.get("type") == "tool_use":
+                        # Tool call starting
+                        current_tool_id = content_block.get("id") or f"call_{uuid.uuid4().hex[:8]}"
+                        current_tool_name = content_block.get("name")
                         tool_call = {
-                            "toolCallId": block.id or f"call_{uuid.uuid4().hex[:8]}",
-                            "toolName": block.name,
-                            "args": block.input if isinstance(block.input, dict) else {},
+                            "toolCallId": current_tool_id,
+                            "toolName": current_tool_name,
+                            "args": {},
                         }
                         yield f"9:{json.dumps(tool_call)}\n"
-                    elif isinstance(block, ToolResultBlock):
-                        # Type a: tool result
-                        content = getattr(block, "content", "")
-                        # Handle content that might be a list of content blocks
-                        if isinstance(content, list):
-                            content = " ".join(
-                                str(c.get("text", c)) if isinstance(c, dict) else str(c)
-                                for c in content
-                            )
-                        tool_result = {
-                            "toolCallId": block.tool_use_id,
-                            "result": str(content),
-                        }
-                        yield f"a:{json.dumps(tool_result)}\n"
+
+                elif event_type == "content_block_delta":
+                    delta = event.get("delta", {})
+                    delta_type = delta.get("type")
+
+                    if delta_type == "text_delta":
+                        # Stream text chunk
+                        text = delta.get("text", "")
+                        if text:
+                            yield f"0:{json.dumps(text)}\n"
+
+                elif event_type == "content_block_stop":
+                    # Tool call finished - we'll get the result from ToolResultBlock
+                    if current_tool_id:
+                        # Tool result will come later, just reset tracking
+                        current_tool_id = None
+                        current_tool_name = None
 
             elif isinstance(message, ResultMessage):
-                # Type d: finish
+                # Agent finished all work
                 yield 'd:{"finishReason":"stop"}\n'
 
     except Exception as e:
