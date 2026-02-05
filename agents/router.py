@@ -3,9 +3,11 @@
 import json
 import re
 from pathlib import Path
+from typing import Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
 
 from sessions import (
     get_session_manager,
@@ -21,6 +23,31 @@ from sessions import (
     WorkspaceFilesResponse,
 )
 from .orchestrator import run_orchestrator_turn
+
+
+# assistant-ui message format
+class MessagePart(BaseModel):
+    type: str
+    text: str | None = None
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant", "system"]
+    parts: list[MessagePart] | None = None
+    content: str | None = None  # Fallback for standard format
+    id: str | None = None
+    metadata: dict | None = None
+
+    def get_text(self) -> str:
+        """Extract text content from either parts or content field."""
+        if self.parts:
+            texts = [p.text for p in self.parts if p.type == "text" and p.text]
+            return " ".join(texts)
+        return self.content or ""
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage]
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -110,17 +137,15 @@ async def delete_session(session_id: str):
 @router.post("/sessions/{session_id}/messages")
 async def send_message(
     session_id: str,
-    content: str = Form(...),
-    attachments: list[UploadFile] = File(default=[]),
+    request: ChatRequest,
 ):
-    """Send a message to a session, optionally with file attachments.
+    """Send a message to a session using Vercel AI SDK format.
 
     Returns an SSE stream of agent response events.
 
     Args:
         session_id: The session ID
-        content: The message content
-        attachments: Optional list of file attachments
+        request: ChatRequest with messages array (Vercel AI SDK format)
 
     Returns:
         StreamingResponse with SSE events
@@ -132,52 +157,29 @@ async def send_message(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # Extract the last user message content
+    user_messages = [m for m in request.messages if m.role == "user"]
+    if not user_messages:
+        raise HTTPException(status_code=400, detail="No user message provided")
+
+    content = user_messages[-1].get_text()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty message content")
+
     # Save the user message
-    message = await manager.save_message(session_id, MessageRole.USER, content)
-
-    # Process attachments
-    workspace = manager.get_workspace_path(session_id)
-    input_dir = workspace / "input"
-
-    for attachment in attachments:
-        if attachment.filename:
-            # Sanitize filename
-            safe_filename = _sanitize_filename(attachment.filename)
-
-            # Save file
-            file_path = input_dir / safe_filename
-            file_content = await attachment.read()
-            file_path.write_bytes(file_content)
-
-            # Save document metadata
-            await manager.save_uploaded_document(
-                session_id=session_id,
-                message_id=message.id,
-                filename=safe_filename,
-                original_filename=attachment.filename,
-                document_type=DocumentType.OTHER,
-                file_path=str(file_path),
-                file_size=len(file_content),
-            )
+    await manager.save_message(session_id, MessageRole.USER, content)
 
     # Get conversation history for context
     history = await manager.get_conversation_history(session_id)
 
-    # Build message content with file upload notification for the agent
-    agent_content = content
-    if attachments:
-        uploaded_filenames = [
-            _sanitize_filename(a.filename) for a in attachments if a.filename
-        ]
-        if uploaded_filenames:
-            file_list = ", ".join(uploaded_filenames)
-            agent_content = f"[Uploaded files saved to input/: {file_list}]\n\n{content}"
+    # Get workspace path
+    workspace = manager.get_workspace_path(session_id)
 
     async def event_stream():
         """Generate Vercel AI SDK Text Stream Protocol events."""
         full_response = ""
 
-        async for chunk in run_orchestrator_turn(workspace, history, agent_content):
+        async for chunk in run_orchestrator_turn(workspace, history, content):
             # Parse text chunks (type 0) to accumulate the full response
             if chunk.startswith("0:"):
                 try:
