@@ -163,11 +163,21 @@ async def send_message(
     # Get conversation history for context
     history = await manager.get_conversation_history(session_id)
 
+    # Build message content with file upload notification for the agent
+    agent_content = content
+    if attachments:
+        uploaded_filenames = [
+            _sanitize_filename(a.filename) for a in attachments if a.filename
+        ]
+        if uploaded_filenames:
+            file_list = ", ".join(uploaded_filenames)
+            agent_content = f"[Uploaded files saved to input/: {file_list}]\n\n{content}"
+
     async def event_stream():
         """Generate Vercel AI SDK Text Stream Protocol events."""
         full_response = ""
 
-        async for chunk in run_orchestrator_turn(workspace, history, content):
+        async for chunk in run_orchestrator_turn(workspace, history, agent_content):
             # Parse text chunks (type 0) to accumulate the full response
             if chunk.startswith("0:"):
                 try:

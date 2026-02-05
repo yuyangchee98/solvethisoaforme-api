@@ -85,8 +85,15 @@ async def run_orchestrator_turn(
                             yield f"0:{json.dumps(text)}\n"
 
                 elif event_type == "content_block_stop":
-                    # Content block finished - reset tracking
+                    # Content block finished
                     if current_tool_id:
+                        # Emit tool completion when tool block ends
+                        # (Tool is about to execute or just finished)
+                        tool_result = {
+                            "toolCallId": current_tool_id,
+                            "result": "completed",
+                        }
+                        yield f"a:{json.dumps(tool_result)}\n"
                         current_tool_id = None
                         current_tool_name = None
 
