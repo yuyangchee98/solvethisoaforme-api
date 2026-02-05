@@ -14,7 +14,7 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 
-from .prompts import get_orchestrator_prompt
+from .prompts import get_orchestrator_prompt, get_agent_definitions
 
 
 async def run_orchestrator_turn(
@@ -52,6 +52,7 @@ async def run_orchestrator_turn(
         permission_mode="acceptEdits",
         max_turns=50,
         include_partial_messages=True,  # Enable token-level streaming
+        agents=get_agent_definitions(),  # Subagent definitions for Task tool
     )
 
     # Track text part state

@@ -180,8 +180,10 @@ async def send_message(
 
     last_user_message = user_messages[-1]
     content = last_user_message.get_text()
+    has_files = bool(last_user_message.get_file_parts())
 
-    if not content:
+    # Allow file-only uploads (no text content required if files are attached)
+    if not content and not has_files:
         raise HTTPException(status_code=400, detail="Empty message content")
 
     # Get workspace path
@@ -223,8 +225,9 @@ async def send_message(
         file_list = ", ".join(uploaded_filenames)
         agent_content = f"[Uploaded files saved to input/: {file_list}]\n\n{content}"
 
-    # Save the user message
-    await manager.save_message(session_id, MessageRole.USER, content)
+    # Save the user message (include file info if text content is empty)
+    saved_content = content if content else f"[Uploaded: {', '.join(uploaded_filenames)}]"
+    await manager.save_message(session_id, MessageRole.USER, saved_content)
 
     # Get conversation history for context
     history = await manager.get_conversation_history(session_id)
