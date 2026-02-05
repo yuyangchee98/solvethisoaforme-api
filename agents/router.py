@@ -150,6 +150,9 @@ async def send_message(
     Returns:
         StreamingResponse with SSE events
     """
+    print(f"[DEBUG] Received request for session {session_id}")
+    print(f"[DEBUG] Request messages: {request.messages}")
+
     manager = get_session_manager()
 
     # Verify session exists
@@ -163,6 +166,8 @@ async def send_message(
         raise HTTPException(status_code=400, detail="No user message provided")
 
     content = user_messages[-1].get_text()
+    print(f"[DEBUG] Extracted content: {content}")
+
     if not content:
         raise HTTPException(status_code=400, detail="Empty message content")
 
@@ -171,23 +176,65 @@ async def send_message(
 
     # Get conversation history for context
     history = await manager.get_conversation_history(session_id)
+    print(f"[DEBUG] History length: {len(history)}")
 
     # Get workspace path
     workspace = manager.get_workspace_path(session_id)
 
     async def event_stream():
-        """Generate Vercel AI SDK Text Stream Protocol events."""
+        """Generate UI Message Stream Protocol events."""
+        import uuid as uuid_mod
+        message_id = str(uuid_mod.uuid4())
+        text_part_id = str(uuid_mod.uuid4())
         full_response = ""
+        chunk_count = 0
+        text_started = False
+
+        # Start message event
+        start_event = {"type": "start", "messageId": message_id}
+        yield f"data: {json.dumps(start_event)}\n\n"
+        print(f"[DEBUG] Sent start event: {start_event}")
 
         async for chunk in run_orchestrator_turn(workspace, history, content):
-            # Parse text chunks (type 0) to accumulate the full response
+            chunk_count += 1
+            print(f"[DEBUG] Chunk {chunk_count}: {chunk[:100]}...")
+
+            # Parse the data stream format and convert to UI message stream
             if chunk.startswith("0:"):
                 try:
                     text = json.loads(chunk[2:].rstrip("\n"))
                     full_response += text
+
+                    # Send text-start on first text chunk
+                    if not text_started:
+                        text_start = {"type": "text-start", "id": text_part_id}
+                        yield f"data: {json.dumps(text_start)}\n\n"
+                        text_started = True
+
+                    # Send text delta
+                    text_delta = {"type": "text-delta", "id": text_part_id, "delta": text}
+                    yield f"data: {json.dumps(text_delta)}\n\n"
                 except json.JSONDecodeError:
                     pass
-            yield chunk
+            elif chunk.startswith("d:"):
+                # Finish event from orchestrator - we'll send our own
+                pass
+
+        # End text part if started
+        if text_started:
+            text_end = {"type": "text-end", "id": text_part_id}
+            yield f"data: {json.dumps(text_end)}\n\n"
+
+        # Finish message event
+        finish_event = {"type": "finish"}
+        yield f"data: {json.dumps(finish_event)}\n\n"
+        print(f"[DEBUG] Sent finish event")
+
+        # Signal end of stream
+        yield "data: [DONE]\n\n"
+
+        print(f"[DEBUG] Stream complete. Total chunks: {chunk_count}")
+        print(f"[DEBUG] Full response length: {len(full_response)}")
 
         # Save assistant response after streaming completes
         if full_response:
@@ -197,12 +244,11 @@ async def send_message(
 
     return StreamingResponse(
         event_stream(),
-        media_type="text/plain",
+        media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
-            "x-vercel-ai-data-stream": "v1",
         },
     )
 
