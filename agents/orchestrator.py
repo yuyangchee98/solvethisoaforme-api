@@ -8,7 +8,9 @@ from typing import AsyncIterator
 from claude_agent_sdk import (
     ClaudeAgentOptions,
     query,
+    AssistantMessage,
     ResultMessage,
+    ToolResultBlock,
 )
 from claude_agent_sdk.types import StreamEvent
 
@@ -83,11 +85,27 @@ async def run_orchestrator_turn(
                             yield f"0:{json.dumps(text)}\n"
 
                 elif event_type == "content_block_stop":
-                    # Tool call finished - we'll get the result from ToolResultBlock
+                    # Content block finished - reset tracking
                     if current_tool_id:
-                        # Tool result will come later, just reset tracking
                         current_tool_id = None
                         current_tool_name = None
+
+            elif isinstance(message, AssistantMessage):
+                # AssistantMessage contains complete content including tool results
+                for block in message.content:
+                    if isinstance(block, ToolResultBlock):
+                        # Emit tool result
+                        content = getattr(block, "content", "")
+                        if isinstance(content, list):
+                            content = " ".join(
+                                str(c.get("text", c)) if isinstance(c, dict) else str(c)
+                                for c in content
+                            )
+                        tool_result = {
+                            "toolCallId": block.tool_use_id,
+                            "result": str(content)[:200],  # Truncate for UI
+                        }
+                        yield f"a:{json.dumps(tool_result)}\n"
 
             elif isinstance(message, ResultMessage):
                 # Agent finished all work
