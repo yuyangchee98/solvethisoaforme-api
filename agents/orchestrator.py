@@ -1,6 +1,7 @@
 """Orchestrator agent for patent prosecution assistance."""
 
 import json
+import uuid
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -21,10 +22,10 @@ async def run_orchestrator_turn(
     workspace: Path,
     conversation_history: list[dict],
     user_message: str,
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[str]:
     """Run one turn of the orchestrator agent.
 
-    Yields SSE events as the agent processes the request.
+    Yields Vercel AI SDK Text Stream Protocol formatted strings.
 
     Args:
         workspace: Path to the session workspace directory
@@ -32,12 +33,12 @@ async def run_orchestrator_turn(
         user_message: The new user message to process
 
     Yields:
-        Event dictionaries for SSE streaming:
-        - {"type": "text", "content": "..."} - streaming text chunk
-        - {"type": "tool_use", "tool": "...", "input": "..."} - tool invocation
-        - {"type": "tool_result", "tool": "..."} - tool completed
-        - {"type": "done"} - turn complete
-        - {"type": "error", "message": "..."} - error occurred
+        Vercel AI SDK Text Stream Protocol formatted strings:
+        - '0:"text"\n' - text delta (type 0)
+        - '9:{"toolCallId":"x","toolName":"Read","args":{}}\n' - tool call start
+        - 'a:{"toolCallId":"x","result":"..."}\n' - tool result
+        - 'd:{"finishReason":"stop"}\n' - finish
+        - 'e:{"message":"..."}\n' - error
     """
     # Build the prompt with conversation history
     prompt = _format_prompt(conversation_history, user_message)
@@ -55,23 +56,39 @@ async def run_orchestrator_turn(
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
-                        yield {"type": "text", "content": block.text}
+                        # Type 0: text delta
+                        yield f"0:{json.dumps(block.text)}\n"
                     elif isinstance(block, ToolUseBlock):
-                        yield {
-                            "type": "tool_use",
-                            "tool": block.name,
-                            "input": json.dumps(block.input)
-                            if isinstance(block.input, dict)
-                            else str(block.input),
+                        # Type 9: tool call start
+                        tool_call = {
+                            "toolCallId": block.id or f"call_{uuid.uuid4().hex[:8]}",
+                            "toolName": block.name,
+                            "args": block.input if isinstance(block.input, dict) else {},
                         }
+                        yield f"9:{json.dumps(tool_call)}\n"
                     elif isinstance(block, ToolResultBlock):
-                        yield {"type": "tool_result", "tool": block.tool_use_id}
+                        # Type a: tool result
+                        content = getattr(block, "content", "")
+                        # Handle content that might be a list of content blocks
+                        if isinstance(content, list):
+                            content = " ".join(
+                                str(c.get("text", c)) if isinstance(c, dict) else str(c)
+                                for c in content
+                            )
+                        tool_result = {
+                            "toolCallId": block.tool_use_id,
+                            "result": str(content),
+                        }
+                        yield f"a:{json.dumps(tool_result)}\n"
 
             elif isinstance(message, ResultMessage):
-                yield {"type": "done"}
+                # Type d: finish
+                yield 'd:{"finishReason":"stop"}\n'
 
     except Exception as e:
-        yield {"type": "error", "message": f"Agent error: {str(e)}"}
+        # Type e: error
+        error_data = {"message": f"Agent error: {str(e)}"}
+        yield f"e:{json.dumps(error_data)}\n"
 
 
 def _format_prompt(conversation_history: list[dict], user_message: str) -> str:

@@ -164,13 +164,18 @@ async def send_message(
     history = await manager.get_conversation_history(session_id)
 
     async def event_stream():
-        """Generate SSE events from the orchestrator."""
+        """Generate Vercel AI SDK Text Stream Protocol events."""
         full_response = ""
 
-        async for event in run_orchestrator_turn(workspace, history, content):
-            if event["type"] == "text":
-                full_response += event["content"]
-            yield f"data: {json.dumps(event)}\n\n"
+        async for chunk in run_orchestrator_turn(workspace, history, content):
+            # Parse text chunks (type 0) to accumulate the full response
+            if chunk.startswith("0:"):
+                try:
+                    text = json.loads(chunk[2:].rstrip("\n"))
+                    full_response += text
+                except json.JSONDecodeError:
+                    pass
+            yield chunk
 
         # Save assistant response after streaming completes
         if full_response:
@@ -180,11 +185,12 @@ async def send_message(
 
     return StreamingResponse(
         event_stream(),
-        media_type="text/event-stream",
+        media_type="text/plain",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            "x-vercel-ai-data-stream": "v1",
         },
     )
 
