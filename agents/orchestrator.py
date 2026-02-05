@@ -9,6 +9,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     query,
     AssistantMessage,
+    UserMessage,
     ResultMessage,
     ToolResultBlock,
 )
@@ -66,6 +67,27 @@ async def run_orchestrator_turn(
 
     try:
         async for message in query(prompt=prompt, options=options):
+            print(f"[orchestrator] Received message type: {type(message).__name__}")
+
+            # Handle UserMessage which contains tool results
+            if isinstance(message, UserMessage):
+                print(f"[orchestrator] UserMessage content types: {[type(b).__name__ for b in message.content]}")
+                for block in message.content:
+                    if isinstance(block, ToolResultBlock):
+                        content = getattr(block, "content", "")
+                        if isinstance(content, list):
+                            content = " ".join(
+                                str(c.get("text", c)) if isinstance(c, dict) else str(c)
+                                for c in content
+                            )
+                        event = {
+                            "type": "tool-output-available",
+                            "toolCallId": block.tool_use_id,
+                            "output": str(content),
+                        }
+                        print(f"[orchestrator] Emitting tool-output-available: toolCallId={block.tool_use_id}, output_len={len(str(content))}")
+                        yield event
+
             if isinstance(message, StreamEvent):
                 event = message.event
                 event_type = event.get("type")
@@ -129,20 +151,8 @@ async def run_orchestrator_turn(
                         current_tool_input_json = ""
 
             elif isinstance(message, AssistantMessage):
-                # AssistantMessage contains complete content including tool results
-                for block in message.content:
-                    if isinstance(block, ToolResultBlock):
-                        content = getattr(block, "content", "")
-                        if isinstance(content, list):
-                            content = " ".join(
-                                str(c.get("text", c)) if isinstance(c, dict) else str(c)
-                                for c in content
-                            )
-                        yield {
-                            "type": "tool-output-available",
-                            "toolCallId": block.tool_use_id,
-                            "output": str(content)[:200],  # Truncate for UI
-                        }
+                # AssistantMessage contains ToolUseBlock (handled via StreamEvent)
+                pass
 
             elif isinstance(message, ResultMessage):
                 # End text part if still active
