@@ -67,11 +67,9 @@ async def run_orchestrator_turn(
 
     try:
         async for message in query(prompt=prompt, options=options):
-            print(f"[orchestrator] Received message type: {type(message).__name__}")
 
             # Handle UserMessage which contains tool results
             if isinstance(message, UserMessage):
-                print(f"[orchestrator] UserMessage content types: {[type(b).__name__ for b in message.content]}")
                 for block in message.content:
                     if isinstance(block, ToolResultBlock):
                         content = getattr(block, "content", "")
@@ -80,13 +78,11 @@ async def run_orchestrator_turn(
                                 str(c.get("text", c)) if isinstance(c, dict) else str(c)
                                 for c in content
                             )
-                        event = {
+                        yield {
                             "type": "tool-output-available",
                             "toolCallId": block.tool_use_id,
                             "output": str(content),
                         }
-                        print(f"[orchestrator] Emitting tool-output-available: toolCallId={block.tool_use_id}, output_len={len(str(content))}")
-                        yield event
 
             if isinstance(message, StreamEvent):
                 event = message.event
