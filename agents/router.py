@@ -29,11 +29,15 @@ from .orchestrator import run_orchestrator_turn
 class MessagePart(BaseModel):
     type: str
     text: str | None = None
-    # For image parts
+    # For image parts (backend format)
     image: str | None = None  # base64 encoded image
-    # For file parts
+    # For file parts (backend format)
     data: str | None = None  # base64 encoded file
+    # Frontend format uses 'url' instead of data/image
+    url: str | None = None
+    # Accept both mimeType (backend) and mediaType (frontend)
     mimeType: str | None = None
+    mediaType: str | None = None
     filename: str | None = None
 
 
@@ -191,20 +195,22 @@ async def send_message(
         filename = part.filename or f"file_{len(uploaded_filenames)}"
         filename = _sanitize_filename(filename)
 
-        # Decode base64 data
-        if part.type == "image" and part.image:
-            # Image data might have data URL prefix
-            image_data = part.image
-            if "," in image_data:
-                image_data = image_data.split(",", 1)[1]
-            file_content = base64.b64decode(image_data)
-        elif part.type == "file" and part.data:
-            file_data = part.data
-            if "," in file_data:
-                file_data = file_data.split(",", 1)[1]
-            file_content = base64.b64decode(file_data)
-        else:
+        # Get the raw data from whichever field is populated
+        # Frontend uses 'url', backend format uses 'data' or 'image'
+        raw_data = None
+        if part.type == "image":
+            raw_data = part.image or part.url
+        elif part.type == "file":
+            raw_data = part.data or part.url
+
+        if not raw_data:
             continue
+
+        # Strip data URL prefix if present (e.g., "data:image/png;base64,...")
+        if "," in raw_data:
+            raw_data = raw_data.split(",", 1)[1]
+
+        file_content = base64.b64decode(raw_data)
 
         # Save file to input directory
         file_path = input_dir / filename
