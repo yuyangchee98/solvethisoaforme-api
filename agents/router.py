@@ -238,7 +238,20 @@ async def send_message(
 
     # Save the user message (include file info if text content is empty)
     saved_content = content if content else f"[Uploaded: {', '.join(uploaded_filenames)}]"
-    await manager.save_message(session_id, MessageRole.USER, saved_content)
+    saved_message = await manager.save_message(session_id, MessageRole.USER, saved_content)
+
+    # Save document metadata for each uploaded file
+    for file_info in uploaded_files:
+        file_on_disk = input_dir / file_info["filename"]
+        await manager.save_uploaded_document(
+            session_id=session_id,
+            message_id=saved_message.id,
+            filename=file_info["filename"],
+            original_filename=file_info["filename"],
+            document_type=DocumentType.OTHER,
+            file_path=str(file_on_disk),
+            file_size=file_on_disk.stat().st_size,
+        )
 
     # Get conversation history for context
     history = await manager.get_conversation_history(session_id)
