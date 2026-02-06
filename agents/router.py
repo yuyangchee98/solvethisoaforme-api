@@ -22,6 +22,7 @@ from sessions import (
     UploadedDocumentResponse,
     WorkspaceFilesResponse,
 )
+from processors import get_processor_registry
 from .orchestrator import run_orchestrator_turn
 
 
@@ -231,18 +232,36 @@ async def send_message(
         # Use the actual media type from the data URL (ground truth),
         # falling back to the declared fields only if there's no data URL
         media_type = data_url_media_type or part.mimeType or part.mediaType or "application/octet-stream"
-        uploaded_files.append({
+        file_info = {
             "filename": filename,
             "path": str(file_path),
             "media_type": media_type,
             "data": base64_data,  # Keep base64 for Claude content blocks
-        })
+        }
+
+        # Run document processor if one matches (e.g. .docx → markdown)
+        result = get_processor_registry().process_if_needed(file_path, media_type, input_dir)
+        if result is not None:
+            if result.extracted_text:
+                file_info["extracted_text"] = result.extracted_text
+            if result.error:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Processor error for %s: %s", filename, result.error
+                )
+
+        uploaded_files.append(file_info)
 
     # Build message content with file upload notification for the agent
     agent_content = content
     if uploaded_filenames:
         file_list = ", ".join(uploaded_filenames)
-        agent_content = f"[Uploaded files saved to input/: {file_list}]\n\n{content}"
+        extracted_files = [f["filename"].replace(Path(f["filename"]).suffix, ".extracted.md")
+                           for f in uploaded_files if "extracted_text" in f]
+        extra = ""
+        if extracted_files:
+            extra = f" Extracted text also saved as: {', '.join(extracted_files)}."
+        agent_content = f"[Uploaded files saved to input/: {file_list}.{extra}]\n\n{content}"
 
     # Save the user message (include file info if text content is empty)
     saved_content = content if content else f"[Uploaded: {', '.join(uploaded_filenames)}]"

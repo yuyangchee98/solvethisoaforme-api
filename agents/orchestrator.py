@@ -70,6 +70,12 @@ def _build_message_content(
                     "data": data,
                 }
             })
+        elif "extracted_text" in file_info:
+            # Processed documents (e.g. .docx): use extracted text
+            content.append({
+                "type": "text",
+                "text": f"<file name=\"{filename}\">\n{file_info['extracted_text']}\n</file>"
+            })
         else:
             # Text files: include content inline
             try:
