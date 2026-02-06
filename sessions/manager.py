@@ -1,5 +1,6 @@
 """Session manager for CRUD operations and filesystem management."""
 
+import json
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -11,6 +12,7 @@ from .models import (
     SessionStatus,
     Message,
     MessageRole,
+    ToolCall,
     UploadedDocument,
     DocumentType,
     WorkspaceFileInfo,
@@ -143,7 +145,11 @@ class SessionManager:
         return True
 
     async def save_message(
-        self, session_id: str, role: MessageRole, content: str
+        self,
+        session_id: str,
+        role: MessageRole,
+        content: str,
+        tool_calls: list[dict] | None = None,
     ) -> Message:
         """Save a message to a session.
 
@@ -151,6 +157,7 @@ class SessionManager:
             session_id: The session ID
             role: The message role (user/assistant/system)
             content: The message content
+            tool_calls: Optional list of tool call dicts
 
         Returns:
             The saved message
@@ -158,13 +165,14 @@ class SessionManager:
         db = await get_db()
 
         now = datetime.now(timezone.utc).isoformat()
+        tool_calls_json = json.dumps(tool_calls) if tool_calls else None
 
         cursor = await db.execute(
             """
-            INSERT INTO messages (session_id, role, content, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO messages (session_id, role, content, tool_calls, created_at)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (session_id, role.value, content, now),
+            (session_id, role.value, content, tool_calls_json, now),
         )
         await db.commit()
 
@@ -175,11 +183,17 @@ class SessionManager:
         )
         await db.commit()
 
+        # Convert tool_calls dicts to ToolCall models
+        tool_call_models = []
+        if tool_calls:
+            tool_call_models = [ToolCall(**tc) for tc in tool_calls]
+
         return Message(
             id=cursor.lastrowid,
             session_id=session_id,
             role=role,
             content=content,
+            tool_calls=tool_call_models,
             created_at=datetime.fromisoformat(now),
         )
 
@@ -196,7 +210,7 @@ class SessionManager:
 
         cursor = await db.execute(
             """
-            SELECT id, session_id, role, content, created_at
+            SELECT id, session_id, role, content, tool_calls, created_at
             FROM messages
             WHERE session_id = ?
             ORDER BY created_at ASC
@@ -205,16 +219,27 @@ class SessionManager:
         )
         rows = await cursor.fetchall()
 
-        return [
-            Message(
-                id=row[0],
-                session_id=row[1],
-                role=MessageRole(row[2]),
-                content=row[3],
-                created_at=datetime.fromisoformat(row[4]),
+        messages = []
+        for row in rows:
+            # Parse tool_calls JSON if present
+            tool_calls_data = row[4]
+            tool_call_models = []
+            if tool_calls_data:
+                tool_calls_list = json.loads(tool_calls_data)
+                tool_call_models = [ToolCall(**tc) for tc in tool_calls_list]
+
+            messages.append(
+                Message(
+                    id=row[0],
+                    session_id=row[1],
+                    role=MessageRole(row[2]),
+                    content=row[3],
+                    tool_calls=tool_call_models,
+                    created_at=datetime.fromisoformat(row[5]),
+                )
             )
-            for row in rows
-        ]
+
+        return messages
 
     async def get_conversation_history(
         self, session_id: str

@@ -237,14 +237,34 @@ async def send_message(
         import uuid as uuid_mod
         message_id = str(uuid_mod.uuid4())
         full_response = ""
+        tool_calls: dict[str, dict] = {}  # toolCallId -> data
 
         # Start message event
         yield f"data: {json.dumps({'type': 'start', 'messageId': message_id})}\n\n"
 
         async for event in run_orchestrator_turn(workspace, history, agent_content):
+            event_type = event.get("type")
+
             # Accumulate text for saving
-            if event.get("type") == "text-delta":
+            if event_type == "text-delta":
                 full_response += event.get("delta", "")
+
+            # Capture tool call input
+            elif event_type == "tool-input-available":
+                tool_call_id = event.get("toolCallId")
+                if tool_call_id:
+                    tool_calls[tool_call_id] = {
+                        "toolCallId": tool_call_id,
+                        "toolName": event.get("toolName"),
+                        "input": event.get("input"),
+                        "output": None,
+                    }
+
+            # Capture tool call output
+            elif event_type == "tool-output-available":
+                tool_call_id = event.get("toolCallId")
+                if tool_call_id and tool_call_id in tool_calls:
+                    tool_calls[tool_call_id]["output"] = event.get("output")
 
             yield f"data: {json.dumps(event)}\n\n"
 
@@ -252,9 +272,12 @@ async def send_message(
         yield "data: [DONE]\n\n"
 
         # Save assistant response after streaming completes
-        if full_response:
+        if full_response or tool_calls:
             await manager.save_message(
-                session_id, MessageRole.ASSISTANT, full_response
+                session_id,
+                MessageRole.ASSISTANT,
+                full_response,
+                tool_calls=list(tool_calls.values()) if tool_calls else None,
             )
 
     return StreamingResponse(
@@ -289,6 +312,7 @@ async def get_messages(session_id: str):
                 id=msg.id,
                 role=msg.role,
                 content=msg.content,
+                tool_calls=msg.tool_calls,
                 created_at=msg.created_at,
                 attachments=[
                     UploadedDocumentResponse(

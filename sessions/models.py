@@ -42,6 +42,15 @@ class Session(BaseModel):
     updated_at: datetime
 
 
+class ToolCall(BaseModel):
+    """A tool call within a message."""
+
+    toolCallId: str
+    toolName: str
+    input: dict
+    output: str | None = None
+
+
 class Message(BaseModel):
     """A message in a session."""
 
@@ -49,6 +58,7 @@ class Message(BaseModel):
     session_id: str
     role: MessageRole
     content: str
+    tool_calls: list[ToolCall] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -105,6 +115,7 @@ class MessageResponse(BaseModel):
     id: int
     role: MessageRole
     content: str
+    tool_calls: list[ToolCall] = Field(default_factory=list)
     created_at: datetime
     attachments: list["UploadedDocumentResponse"] = Field(default_factory=list)
 
