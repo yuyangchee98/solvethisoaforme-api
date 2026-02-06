@@ -157,7 +157,6 @@ async def run_orchestrator_turn(
 
     try:
         async for message in query(prompt=prompt_input, options=options):
-
             # Handle UserMessage which contains tool results
             if isinstance(message, UserMessage):
                 for block in message.content:
