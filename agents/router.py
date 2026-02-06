@@ -210,9 +210,16 @@ async def send_message(
             continue
 
         # Strip data URL prefix if present (e.g., "data:image/png;base64,...")
+        # and extract the actual media type from it (more reliable than
+        # the mediaType field, which upstream libs may hardcode incorrectly)
         base64_data = raw_data
-        if "," in raw_data:
-            base64_data = raw_data.split(",", 1)[1]
+        data_url_media_type = None
+        if raw_data.startswith("data:") and "," in raw_data:
+            header, base64_data = raw_data.split(",", 1)
+            # header is e.g. "data:image/jpeg;base64"
+            mime_part = header.removeprefix("data:").split(";")[0]
+            if "/" in mime_part:
+                data_url_media_type = mime_part
 
         file_content = base64.b64decode(base64_data)
 
@@ -221,8 +228,9 @@ async def send_message(
         file_path.write_bytes(file_content)
         uploaded_filenames.append(filename)
 
-        # Build file metadata for native Claude content blocks
-        media_type = part.mimeType or part.mediaType or "application/octet-stream"
+        # Use the actual media type from the data URL (ground truth),
+        # falling back to the declared fields only if there's no data URL
+        media_type = data_url_media_type or part.mimeType or part.mediaType or "application/octet-stream"
         uploaded_files.append({
             "filename": filename,
             "path": str(file_path),
