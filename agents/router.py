@@ -193,6 +193,7 @@ async def send_message(
     # Process file attachments (base64 encoded)
     import base64
     uploaded_filenames = []
+    uploaded_files = []  # For native Claude content blocks
     for part in last_user_message.get_file_parts():
         filename = part.filename or f"file_{len(uploaded_filenames)}"
         filename = _sanitize_filename(filename)
@@ -209,15 +210,25 @@ async def send_message(
             continue
 
         # Strip data URL prefix if present (e.g., "data:image/png;base64,...")
+        base64_data = raw_data
         if "," in raw_data:
-            raw_data = raw_data.split(",", 1)[1]
+            base64_data = raw_data.split(",", 1)[1]
 
-        file_content = base64.b64decode(raw_data)
+        file_content = base64.b64decode(base64_data)
 
         # Save file to input directory
         file_path = input_dir / filename
         file_path.write_bytes(file_content)
         uploaded_filenames.append(filename)
+
+        # Build file metadata for native Claude content blocks
+        media_type = part.mimeType or part.mediaType or "application/octet-stream"
+        uploaded_files.append({
+            "filename": filename,
+            "path": str(file_path),
+            "media_type": media_type,
+            "data": base64_data,  # Keep base64 for Claude content blocks
+        })
 
     # Build message content with file upload notification for the agent
     agent_content = content
@@ -242,7 +253,7 @@ async def send_message(
         # Start message event
         yield f"data: {json.dumps({'type': 'start', 'messageId': message_id})}\n\n"
 
-        async for event in run_orchestrator_turn(workspace, history, agent_content):
+        async for event in run_orchestrator_turn(workspace, history, agent_content, uploaded_files):
             event_type = event.get("type")
 
             # Accumulate text for saving

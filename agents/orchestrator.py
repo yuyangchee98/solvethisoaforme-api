@@ -1,9 +1,10 @@
 """Orchestrator agent for patent prosecution assistance."""
 
+import base64
 import json
 import uuid
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Any
 
 from claude_agent_sdk import (
     ClaudeAgentOptions,
@@ -18,10 +19,80 @@ from claude_agent_sdk.types import StreamEvent
 from .prompts import get_orchestrator_prompt, get_agent_definitions
 
 
+# Supported image MIME types for Claude vision
+IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+
+
+def _build_message_content(
+    user_message: str,
+    uploaded_files: list[dict[str, Any]] | None,
+) -> str | list[dict[str, Any]]:
+    """Build Claude message content with native document/image blocks.
+
+    Args:
+        user_message: The user's text message
+        uploaded_files: List of uploaded file metadata with:
+            - filename: str
+            - path: str
+            - media_type: str
+            - data: str (base64 encoded)
+
+    Returns:
+        Either a simple string (no files) or a list of content blocks
+    """
+    if not uploaded_files:
+        return user_message
+
+    content: list[dict[str, Any]] = []
+
+    for file_info in uploaded_files:
+        media_type = file_info["media_type"]
+        filename = file_info["filename"]
+        data = file_info["data"]
+
+        if media_type == "application/pdf":
+            # PDF: use native document block for visual understanding
+            content.append({
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": data,
+                }
+            })
+        elif media_type in IMAGE_MIME_TYPES:
+            # Images: use native image block for vision
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": data,
+                }
+            })
+        else:
+            # Text files: include content inline
+            try:
+                text_content = base64.b64decode(data).decode("utf-8")
+                content.append({
+                    "type": "text",
+                    "text": f"<file name=\"{filename}\">\n{text_content}\n</file>"
+                })
+            except (UnicodeDecodeError, ValueError):
+                # Skip binary files that aren't PDF/image
+                pass
+
+    # Add user's text message at the end
+    content.append({"type": "text", "text": user_message})
+
+    return content
+
+
 async def run_orchestrator_turn(
     workspace: Path,
     conversation_history: list[dict],
     user_message: str,
+    uploaded_files: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[dict]:
     """Run one turn of the orchestrator agent.
 
@@ -31,6 +102,7 @@ async def run_orchestrator_turn(
         workspace: Path to the session workspace directory
         conversation_history: Previous conversation messages
         user_message: The new user message to process
+        uploaded_files: Optional list of uploaded file metadata for native content blocks
 
     Yields:
         UI Message Stream Protocol event dicts:
@@ -43,8 +115,11 @@ async def run_orchestrator_turn(
         - {"type": "error", "errorText": "..."}
         - {"type": "finish"}
     """
+    # Build the message content with native file blocks if files are uploaded
+    message_content = _build_message_content(user_message, uploaded_files)
+
     # Build the prompt with conversation history
-    prompt = _format_prompt(conversation_history, user_message)
+    prompt = _format_prompt(conversation_history, message_content)
 
     options = ClaudeAgentOptions(
         system_prompt=get_orchestrator_prompt(),
@@ -65,8 +140,23 @@ async def run_orchestrator_turn(
     current_tool_name: str | None = None
     current_tool_input_json = ""  # Accumulate input JSON delta
 
+    # Determine prompt format based on whether we have content blocks
+    if isinstance(prompt, list):
+        # Use streaming mode for content blocks (files attached)
+        async def prompt_stream():
+            yield {
+                "type": "user",
+                "message": {"role": "user", "content": prompt},
+                "parent_tool_use_id": None,
+                "session_id": str(uuid.uuid4()),
+            }
+        prompt_input = prompt_stream()
+    else:
+        # Use simple string mode for text-only messages
+        prompt_input = prompt
+
     try:
-        async for message in query(prompt=prompt, options=options):
+        async for message in query(prompt=prompt_input, options=options):
 
             # Handle UserMessage which contains tool results
             if isinstance(message, UserMessage):
@@ -167,29 +257,61 @@ async def run_orchestrator_turn(
         yield {"type": "finish"}
 
 
-def _format_prompt(conversation_history: list[dict], user_message: str) -> str:
+def _format_prompt(
+    conversation_history: list[dict],
+    user_message: str | list[dict[str, Any]],
+) -> str | list[dict[str, Any]]:
     """Format the conversation history and new message into a prompt.
 
     Args:
         conversation_history: Previous messages as list of {role, content}
-        user_message: The new user message
+        user_message: The new user message (string or list of content blocks)
 
     Returns:
-        Formatted prompt string
+        Formatted prompt - string if user_message is string, otherwise
+        prepends conversation history to content blocks
     """
-    parts = []
-
-    # Include conversation history
+    # Build conversation history prefix
+    history_parts = []
     if conversation_history:
-        parts.append("<conversation_history>")
+        history_parts.append("<conversation_history>")
         for msg in conversation_history:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            parts.append(f"<{role}>{content}</{role}>")
-        parts.append("</conversation_history>")
-        parts.append("")
+            history_parts.append(f"<{role}>{content}</{role}>")
+        history_parts.append("</conversation_history>")
+        history_parts.append("")
 
-    # Add the new user message
-    parts.append(f"<user_message>{user_message}</user_message>")
+    # If user_message is a string, return formatted string
+    if isinstance(user_message, str):
+        history_parts.append(f"<user_message>{user_message}</user_message>")
+        return "\n".join(history_parts)
 
-    return "\n".join(parts)
+    # If user_message is a list of content blocks, prepend history as text block
+    if history_parts:
+        history_text = "\n".join(history_parts)
+        # Find the last text block (which contains the actual user message)
+        # and prepend the history to it
+        result = []
+        for i, block in enumerate(user_message):
+            if block.get("type") == "text" and i == len(user_message) - 1:
+                # This is the last text block - prepend history
+                result.append({
+                    "type": "text",
+                    "text": f"{history_text}\n<user_message>{block['text']}</user_message>"
+                })
+            else:
+                result.append(block)
+        return result
+
+    # No history, just wrap user message text in tags
+    result = []
+    for i, block in enumerate(user_message):
+        if block.get("type") == "text" and i == len(user_message) - 1:
+            result.append({
+                "type": "text",
+                "text": f"<user_message>{block['text']}</user_message>"
+            })
+        else:
+            result.append(block)
+    return result
