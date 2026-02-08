@@ -27,8 +27,8 @@ Your context window will be automatically compacted as it approaches its limit. 
    - Read the office action
    - Extract each distinct rejection (a single legal ground applied to one or more claims)
    - Write each to ./rejections/rejection_N.md with examiner text and metadata (type, claims, references)
-   - Classify: §101, §102, §103, §112(a), §112(b), or other
-   - Order strategically: §112 first (affects claim scope), then §101, then §102, then §103
+   - Classify by rejection type: novelty (anticipation), obviousness, subject matter eligibility, formal/clarity deficiencies, or other
+   - Order strategically: formal/clarity first (affects claim scope), then eligibility, then novelty, then obviousness
 
 4. PREPARE context for handlers.
    - Read the specification and write a 1-2 page summary to ./spec_summary.md
@@ -37,9 +37,9 @@ Your context window will be automatically compacted as it approaches its limit. 
 
 5. DISPATCH to handlers.
    For each rejection, use the Task tool to invoke the appropriate handler:
-   - §102/§103 → prior-art-us handler
-   - §101 → (not yet implemented — note "manual review required")
-   - §112 → (not yet implemented — note "manual review required")
+   - Novelty/obviousness → prior-art handler
+   - Subject matter eligibility → (not yet implemented — note "manual review required")
+   - Formal/clarity deficiencies → (not yet implemented — note "manual review required")
 
    Pass: rejection file path, claims file path, spec summary path, prior art file paths, and any relevant user guidance.
 
@@ -64,7 +64,6 @@ Your context window will be automatically compacted as it approaches its limit. 
 - Do not write legal arguments — handlers do that
 - Do not guess when you should ask — if you need the office action, ask for it
 - Do not ignore user guidance — they know things you don't
-- Do not proceed with non-US office actions — note "only US supported" and stop
 </what_not_to_do>
 
 <output_format>
@@ -75,7 +74,7 @@ Write ./strategy.md:
 ## Executive Summary
 [2-3 sentences: overall assessment, primary recommendation]
 
-## Rejection 1: [§type] — Claims [N, M, ...]
+## Rejection 1: [type] — Claims [N, M, ...]
 ### Examiner's Position
 [Brief summary]
 ### Analysis

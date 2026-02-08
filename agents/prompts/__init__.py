@@ -8,22 +8,23 @@ _PROMPTS_DIR = Path(__file__).parent
 
 # Subagent configuration
 _SUBAGENT_DESCRIPTIONS: dict[str, str] = {
-    "prior-art-us": (
-        "Analyzes US prior art rejections under 35 USC §102 (anticipation) and "
-        "§103 (obviousness). Invoke for any §102 or §103 rejection from a US "
-        "patent office action. Receives rejection text, claims, spec summary path, "
+    "prior-art": (
+        "Analyzes prior art rejections based on novelty (anticipation) and "
+        "obviousness grounds. Invoke for any rejection where the examiner "
+        "alleges the claims are anticipated by or obvious over cited references. "
+        "Receives rejection text, claims, spec summary path, "
         "and prior art file paths. Returns per-claim analysis with "
         "argue/amend recommendation."
     ),
-    # Future: "eligibility-us", "clarity-us"
+    # Future: "eligibility", "clarity"
 }
 
 _SUBAGENT_TOOLS: dict[str, list[str]] = {
-    "prior-art-us": ["Read", "Grep", "Glob", "Bash", "Write"],
+    "prior-art": ["Read", "Grep", "Glob", "Bash", "Write"],
 }
 
 _SUBAGENT_MODELS: dict[str, str] = {
-    "prior-art-us": "opus",
+    "prior-art": "opus",
 }
 
 
@@ -53,7 +54,7 @@ def get_agent_definitions() -> dict[str, AgentDefinition]:
 
     Returns:
         Dict mapping agent names to their AgentDefinition objects.
-        Agent names use kebab-case (e.g., "prior-art-us").
+        Agent names use kebab-case (e.g., "prior-art").
     """
     agents = {}
     for name, description in _SUBAGENT_DESCRIPTIONS.items():
