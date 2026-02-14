@@ -28,8 +28,11 @@ class SessionManager:
     # Workspace subdirectories created for each session
     WORKSPACE_DIRS = ["input", "rejections", "prior_art_working"]
 
-    async def create_session(self) -> Session:
+    async def create_session(self, user_id: str | None = None) -> Session:
         """Create a new session with workspace directories.
+
+        Args:
+            user_id: Optional user ID to associate with the session
 
         Returns:
             The newly created session
@@ -42,10 +45,10 @@ class SessionManager:
         # Insert session record
         await db.execute(
             """
-            INSERT INTO sessions (id, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO sessions (id, status, created_at, updated_at, user_id)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (session_id, SessionStatus.ACTIVE.value, now, now),
+            (session_id, SessionStatus.ACTIVE.value, now, now, user_id),
         )
         await db.commit()
 
@@ -63,21 +66,30 @@ class SessionManager:
             updated_at=datetime.fromisoformat(now),
         )
 
-    async def get_session(self, session_id: str) -> Session | None:
-        """Get a session by ID.
+    async def get_session(
+        self, session_id: str, user_id: str | None = None
+    ) -> Session | None:
+        """Get a session by ID, optionally verifying ownership.
 
         Args:
             session_id: The session ID
+            user_id: If provided, verify the session belongs to this user
 
         Returns:
-            The session if found, None otherwise
+            The session if found (and owned by user_id if given), None otherwise
         """
         db = await get_db()
 
-        cursor = await db.execute(
-            "SELECT id, status, created_at, updated_at FROM sessions WHERE id = ?",
-            (session_id,),
-        )
+        if user_id:
+            cursor = await db.execute(
+                "SELECT id, status, created_at, updated_at FROM sessions WHERE id = ? AND user_id = ?",
+                (session_id, user_id),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT id, status, created_at, updated_at FROM sessions WHERE id = ?",
+                (session_id,),
+            )
         row = await cursor.fetchone()
 
         if row is None:
@@ -90,21 +102,35 @@ class SessionManager:
             updated_at=datetime.fromisoformat(row[3]),
         )
 
-    async def list_sessions(self) -> list[Session]:
-        """List all sessions.
+    async def list_sessions(self, user_id: str | None = None) -> list[Session]:
+        """List sessions, optionally filtered by user.
+
+        Args:
+            user_id: If provided, only return sessions for this user
 
         Returns:
-            List of all sessions ordered by creation date (newest first)
+            List of sessions ordered by creation date (newest first)
         """
         db = await get_db()
 
-        cursor = await db.execute(
-            """
-            SELECT id, status, created_at, updated_at
-            FROM sessions
-            ORDER BY created_at DESC
-            """
-        )
+        if user_id:
+            cursor = await db.execute(
+                """
+                SELECT id, status, created_at, updated_at
+                FROM sessions
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                """,
+                (user_id,),
+            )
+        else:
+            cursor = await db.execute(
+                """
+                SELECT id, status, created_at, updated_at
+                FROM sessions
+                ORDER BY created_at DESC
+                """
+            )
         rows = await cursor.fetchall()
 
         return [
@@ -117,19 +143,22 @@ class SessionManager:
             for row in rows
         ]
 
-    async def delete_session(self, session_id: str) -> bool:
+    async def delete_session(
+        self, session_id: str, user_id: str | None = None
+    ) -> bool:
         """Delete a session and its workspace.
 
         Args:
             session_id: The session ID to delete
+            user_id: If provided, verify ownership before deleting
 
         Returns:
             True if session was deleted, False if not found
         """
         db = await get_db()
 
-        # Check if session exists
-        session = await self.get_session(session_id)
+        # Check if session exists (with ownership check if user_id provided)
+        session = await self.get_session(session_id, user_id=user_id)
         if session is None:
             return False
 

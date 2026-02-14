@@ -7,10 +7,19 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "spacy>=3.8.0",
+    "en-core-web-trf",
+    "en-core-web-md",
     "python-docx>=1.1.0",
+    "aiosqlite>=0.19.0",
+    "python-multipart>=0.0.6",
+    "claude-agent-sdk>=0.1.0",
+    "fastapi-users[sqlalchemy]>=14.0.0",
+    "stripe>=8.0.0",
 ]
 
 [tool.uv]
 dev-dependencies = []
 
 [tool.uv.sources]
+en-core-web-trf = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl" }
+en-core-web-md = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl" }

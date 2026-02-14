@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -23,7 +23,19 @@ from sessions import (
     WorkspaceFilesResponse,
 )
 from processors import get_processor_registry
+from auth.users import current_active_user
+from auth.models import User
 from .orchestrator import run_orchestrator_turn
+
+
+async def require_subscription(user: User = Depends(current_active_user)) -> User:
+    """Dependency that requires an active subscription."""
+    if user.subscription_status not in ("active", "trialing"):
+        raise HTTPException(
+            status_code=403,
+            detail="Active subscription required",
+        )
+    return user
 
 
 # assistant-ui message format
@@ -89,10 +101,10 @@ def _sanitize_filename(filename: str) -> str:
 
 
 @router.post("/sessions", response_model=CreateSessionResponse)
-async def create_session():
+async def create_session(user: User = Depends(require_subscription)):
     """Create a new session with workspace directories."""
     manager = get_session_manager()
-    session = await manager.create_session()
+    session = await manager.create_session(user_id=str(user.id))
 
     return CreateSessionResponse(
         id=session.id,
@@ -102,10 +114,10 @@ async def create_session():
 
 
 @router.get("/sessions", response_model=SessionListResponse)
-async def list_sessions():
-    """List all sessions."""
+async def list_sessions(user: User = Depends(require_subscription)):
+    """List all sessions for the current user."""
     manager = get_session_manager()
-    sessions = await manager.list_sessions()
+    sessions = await manager.list_sessions(user_id=str(user.id))
 
     return SessionListResponse(
         sessions=[
@@ -122,10 +134,10 @@ async def list_sessions():
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
-async def get_session(session_id: str):
+async def get_session(session_id: str, user: User = Depends(require_subscription)):
     """Get a specific session."""
     manager = get_session_manager()
-    session = await manager.get_session(session_id)
+    session = await manager.get_session(session_id, user_id=str(user.id))
 
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -140,10 +152,10 @@ async def get_session(session_id: str):
 
 
 @router.delete("/sessions/{session_id}", response_model=DeleteSessionResponse)
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, user: User = Depends(require_subscription)):
     """Delete a session and its workspace."""
     manager = get_session_manager()
-    deleted = await manager.delete_session(session_id)
+    deleted = await manager.delete_session(session_id, user_id=str(user.id))
 
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -155,6 +167,7 @@ async def delete_session(session_id: str):
 async def send_message(
     session_id: str,
     request: ChatRequest,
+    user: User = Depends(require_subscription),
 ):
     """Send a message to a session using Vercel AI SDK format.
 
@@ -169,8 +182,8 @@ async def send_message(
     """
     manager = get_session_manager()
 
-    # Verify session exists
-    session = await manager.get_session(session_id)
+    # Verify session exists and belongs to user
+    session = await manager.get_session(session_id, user_id=str(user.id))
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -343,12 +356,12 @@ async def send_message(
 
 
 @router.get("/sessions/{session_id}/messages", response_model=MessageListResponse)
-async def get_messages(session_id: str):
+async def get_messages(session_id: str, user: User = Depends(require_subscription)):
     """Get all messages for a session."""
     manager = get_session_manager()
 
-    # Verify session exists
-    session = await manager.get_session(session_id)
+    # Verify session exists and belongs to user
+    session = await manager.get_session(session_id, user_id=str(user.id))
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -383,7 +396,9 @@ async def get_messages(session_id: str):
 
 
 @router.get("/sessions/{session_id}/files", response_model=WorkspaceFilesResponse)
-async def list_workspace_files(session_id: str, path: str = ""):
+async def list_workspace_files(
+    session_id: str, path: str = "", user: User = Depends(require_subscription)
+):
     """List files in a session's workspace.
 
     Args:
@@ -392,8 +407,8 @@ async def list_workspace_files(session_id: str, path: str = ""):
     """
     manager = get_session_manager()
 
-    # Verify session exists
-    session = await manager.get_session(session_id)
+    # Verify session exists and belongs to user
+    session = await manager.get_session(session_id, user_id=str(user.id))
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -403,7 +418,9 @@ async def list_workspace_files(session_id: str, path: str = ""):
 
 
 @router.get("/sessions/{session_id}/files/{file_path:path}")
-async def download_file(session_id: str, file_path: str):
+async def download_file(
+    session_id: str, file_path: str, user: User = Depends(require_subscription)
+):
     """Download a file from the session workspace.
 
     Args:
@@ -412,8 +429,8 @@ async def download_file(session_id: str, file_path: str):
     """
     manager = get_session_manager()
 
-    # Verify session exists
-    session = await manager.get_session(session_id)
+    # Verify session exists and belongs to user
+    session = await manager.get_session(session_id, user_id=str(user.id))
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 

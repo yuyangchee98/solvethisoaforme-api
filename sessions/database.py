@@ -89,12 +89,22 @@ async def init_db() -> None:
     db_path = get_db_path()
     _connection = await aiosqlite.connect(db_path)
 
-    # Enable foreign keys
+    # Enable foreign keys and WAL mode for concurrent access
     await _connection.execute("PRAGMA foreign_keys = ON")
+    await _connection.execute("PRAGMA journal_mode = WAL")
 
     # Run schema
     await _connection.executescript(SCHEMA)
     await _connection.commit()
+
+    # Migration: add user_id column to sessions if missing
+    cursor = await _connection.execute("PRAGMA table_info(sessions)")
+    columns = [row[1] for row in await cursor.fetchall()]
+    if "user_id" not in columns:
+        await _connection.execute(
+            "ALTER TABLE sessions ADD COLUMN user_id TEXT"
+        )
+        await _connection.commit()
 
 
 async def close_db() -> None:

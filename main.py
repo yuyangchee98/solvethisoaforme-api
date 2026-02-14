@@ -5,6 +5,7 @@ Extracts noun phrases, identifies introductions/references,
 and checks antecedent basis using spaCy.
 """
 
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -14,6 +15,12 @@ from models import AnalyzeClaimsRequest, AnalyzeClaimsResponse
 from core.analyzer import ClaimAnalyzer, register_default_validators
 from sessions import init_db, close_db
 from agents import agents_router
+from auth.db import init_auth_db
+from auth.users import fastapi_users, auth_backend
+from auth.schemas import UserRead, UserCreate, UserUpdate
+from billing.router import router as billing_router
+
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:4321")
 
 
 @asynccontextmanager
@@ -22,6 +29,7 @@ async def lifespan(app: FastAPI):
     # Startup
     register_default_validators()
     await init_db()
+    await init_auth_db()
 
     yield
 
@@ -35,10 +43,29 @@ app = FastAPI(title="Patent Claim NLP API", lifespan=lifespan)
 # Allow CORS for webapp
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[FRONTEND_URL, "http://localhost:4321"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Auth routers
+app.include_router(
+    fastapi_users.get_auth_router(auth_backend), prefix="/auth/jwt", tags=["auth"]
+)
+app.include_router(
+    fastapi_users.get_register_router(UserRead, UserCreate),
+    prefix="/auth",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_users_router(UserRead, UserUpdate),
+    prefix="/users",
+    tags=["users"],
+)
+
+# Billing router
+app.include_router(billing_router)
 
 # Include agent router
 app.include_router(agents_router)
