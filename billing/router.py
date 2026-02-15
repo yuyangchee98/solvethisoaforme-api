@@ -40,6 +40,13 @@ async def create_checkout_session(
     if not price_id:
         raise HTTPException(status_code=400, detail="Invalid plan")
 
+    # Reuse existing Stripe customer if available
+    customer_kwargs = {}
+    if user.stripe_customer_id:
+        customer_kwargs["customer"] = user.stripe_customer_id
+    else:
+        customer_kwargs["customer_email"] = user.email
+
     try:
         session = stripe.checkout.Session.create(
             mode="subscription",
@@ -47,7 +54,7 @@ async def create_checkout_session(
             allow_promotion_codes=True,
             success_url=f"{FRONTEND_URL}/agent?checkout=success",
             cancel_url=f"{FRONTEND_URL}/login?checkout=canceled",
-            customer_email=user.email,
+            **customer_kwargs,
             metadata={
                 "user_id": str(user.id),
                 "plan": body.plan,
