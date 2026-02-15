@@ -5,6 +5,9 @@ Extracts noun phrases, identifies introductions/references,
 and checks antecedent basis using spaCy.
 """
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 from contextlib import asynccontextmanager
 

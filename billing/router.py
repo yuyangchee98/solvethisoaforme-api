@@ -14,6 +14,8 @@ from auth.users import current_active_user
 
 logger = logging.getLogger(__name__)
 
+PROJECT_ID = "solvethisoaforme"
+
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:4321")
@@ -45,7 +47,17 @@ async def create_checkout_session(
             success_url=f"{FRONTEND_URL}/agent?checkout=success",
             cancel_url=f"{FRONTEND_URL}/login?checkout=canceled",
             customer_email=user.email,
-            metadata={"user_id": str(user.id), "plan": body.plan},
+            metadata={
+                "user_id": str(user.id),
+                "plan": body.plan,
+                "project": PROJECT_ID,
+            },
+            subscription_data={
+                "metadata": {
+                    "user_id": str(user.id),
+                    "project": PROJECT_ID,
+                },
+            },
         )
     except stripe.StripeError as e:
         logger.error("Stripe checkout error: %s", e)
@@ -69,9 +81,14 @@ async def stripe_webhook(request: Request):
     event_type = event["type"]
     data = event["data"]["object"]
 
+    # Skip events not meant for this project
+    metadata = data.get("metadata", {})
+    if metadata.get("project") != PROJECT_ID:
+        return {"status": "skipped"}
+
     if event_type == "checkout.session.completed":
-        user_id = data.get("metadata", {}).get("user_id")
-        plan = data.get("metadata", {}).get("plan")
+        user_id = metadata.get("user_id")
+        plan = metadata.get("plan")
         if user_id:
             async with async_session_maker() as session:
                 await session.execute(
