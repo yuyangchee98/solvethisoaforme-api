@@ -44,6 +44,7 @@ async def create_checkout_session(
         session = stripe.checkout.Session.create(
             mode="subscription",
             line_items=[{"price": price_id, "quantity": 1}],
+            allow_promotion_codes=True,
             success_url=f"{FRONTEND_URL}/agent?checkout=success",
             cancel_url=f"{FRONTEND_URL}/login?checkout=canceled",
             customer_email=user.email,
