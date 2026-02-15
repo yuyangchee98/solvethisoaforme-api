@@ -46,7 +46,7 @@ app = FastAPI(title="Patent Claim NLP API", lifespan=lifespan)
 # Allow CORS for webapp
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL, "http://localhost:4321"],
+    allow_origins=[FRONTEND_URL],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
