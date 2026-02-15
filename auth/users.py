@@ -16,7 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .db import get_async_session
 from .models import User
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "CHANGE-ME-IN-PRODUCTION")
+JWT_SECRET = os.environ.get("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError("JWT_SECRET environment variable is required")
 
 
 async def get_user_db(session: AsyncSession = Depends(get_async_session)):

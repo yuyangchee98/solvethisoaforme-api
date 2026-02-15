@@ -11,7 +11,7 @@ load_dotenv()
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import AnalyzeClaimsRequest, AnalyzeClaimsResponse
@@ -19,7 +19,7 @@ from core.analyzer import ClaimAnalyzer, register_default_validators
 from sessions import init_db, close_db
 from agents import agents_router
 from auth.db import init_auth_db
-from auth.users import fastapi_users, auth_backend
+from auth.users import fastapi_users, auth_backend, current_active_user
 from auth.schemas import UserRead, UserCreate, UserUpdate
 from billing.router import router as billing_router
 
@@ -78,7 +78,7 @@ analyzer = ClaimAnalyzer()
 
 
 @app.post("/analyze-claims", response_model=AnalyzeClaimsResponse)
-def analyze_claims(request: AnalyzeClaimsRequest):
+def analyze_claims(request: AnalyzeClaimsRequest, user=Depends(current_active_user)):
     """Analyze all claims for antecedent basis errors.
 
     Args:
