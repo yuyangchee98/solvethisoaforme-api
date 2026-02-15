@@ -67,6 +67,23 @@ async def create_checkout_session(
     return {"url": session.url}
 
 
+@router.post("/create-portal-session")
+async def create_portal_session(user: User = Depends(current_active_user)):
+    if not user.stripe_customer_id:
+        raise HTTPException(status_code=400, detail="No billing account found")
+
+    try:
+        session = stripe.billing_portal.Session.create(
+            customer=user.stripe_customer_id,
+            return_url=f"{FRONTEND_URL}/agent",
+        )
+    except stripe.StripeError as e:
+        logger.error("Stripe portal error: %s", e)
+        raise HTTPException(status_code=502, detail="Payment service error")
+
+    return {"url": session.url}
+
+
 @router.post("/webhook")
 async def stripe_webhook(request: Request):
     payload = await request.body()
