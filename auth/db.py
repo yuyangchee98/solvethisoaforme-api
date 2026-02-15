@@ -6,6 +6,7 @@ WAL mode is essential for concurrent access from both ORMs.
 
 import os
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 DATA_PATH = os.environ.get("DATA_PATH", "./data")
@@ -20,9 +21,7 @@ async def init_auth_db() -> None:
     from .models import Base
 
     async with engine.begin() as conn:
-        await conn.execute(
-            __import__("sqlalchemy").text("PRAGMA journal_mode=WAL")
-        )
+        await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.run_sync(Base.metadata.create_all)
 
 
