@@ -17,6 +17,7 @@ from claude_agent_sdk import (
 from claude_agent_sdk.types import StreamEvent
 
 from .prompts import get_orchestrator_prompt, get_agent_definitions
+from .tools import create_patent_tools_server
 
 
 # Supported image MIME types for Claude vision
@@ -127,14 +128,17 @@ async def run_orchestrator_turn(
     # Build the prompt with conversation history
     prompt = _format_prompt(conversation_history, message_content)
 
+    patent_server = create_patent_tools_server(workspace)
+
     options = ClaudeAgentOptions(
         system_prompt=get_orchestrator_prompt(),
         cwd=str(workspace),
-        allowed_tools=["Read", "Write", "Grep", "Glob", "Bash", "Task"],
+        allowed_tools=["Read", "Write", "Grep", "Glob", "Bash", "Task", "FetchPatent"],
         permission_mode="acceptEdits",
         max_turns=50,
         include_partial_messages=True,  # Enable token-level streaming
         agents=get_agent_definitions(),  # Subagent definitions for Task tool
+        mcp_servers={"patent-tools": patent_server},
     )
 
     # Track text part state
