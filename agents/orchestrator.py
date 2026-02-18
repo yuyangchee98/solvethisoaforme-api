@@ -157,6 +157,10 @@ async def run_orchestrator_turn(
     current_tool_name: str | None = None
     current_tool_input_json = ""  # Accumulate input JSON delta
 
+    # Track announced tool IDs so we only emit outputs for tools the frontend knows about
+    # (subagent internal tool results can leak through the stream)
+    announced_tool_ids: set[str] = set()
+
     # MCP servers require streaming input mode — always use an async generator
     if isinstance(prompt, str):
         prompt_content: str | list = prompt
@@ -178,6 +182,10 @@ async def run_orchestrator_turn(
             if isinstance(message, UserMessage):
                 for block in message.content:
                     if isinstance(block, ToolResultBlock):
+                        # Only emit output for tools we announced to the frontend;
+                        # subagent internal tool results have IDs we never announced.
+                        if block.tool_use_id not in announced_tool_ids:
+                            continue
                         content = getattr(block, "content", "")
                         if isinstance(content, list):
                             content = " ".join(
@@ -208,6 +216,7 @@ async def run_orchestrator_turn(
                         current_tool_name = content_block.get("name")
                         current_tool_input_json = ""
 
+                        announced_tool_ids.add(current_tool_id)
                         yield {
                             "type": "tool-input-start",
                             "toolCallId": current_tool_id,
