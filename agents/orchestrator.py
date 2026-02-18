@@ -130,15 +130,22 @@ async def run_orchestrator_turn(
 
     patent_server = create_patent_tools_server(workspace)
 
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
+    def _on_stderr(line: str) -> None:
+        _log.error("CLI stderr: %s", line.rstrip())
+
     options = ClaudeAgentOptions(
         system_prompt=get_orchestrator_prompt(),
         cwd=str(workspace),
-        allowed_tools=["Read", "Write", "Grep", "Glob", "Bash", "Task", "FetchPatent"],
+        allowed_tools=["Read", "Write", "Grep", "Glob", "Bash", "Task", "mcp__patent-tools__FetchPatent"],
         permission_mode="acceptEdits",
         max_turns=50,
         include_partial_messages=True,  # Enable token-level streaming
         agents=get_agent_definitions(),  # Subagent definitions for Task tool
         mcp_servers={"patent-tools": patent_server},
+        stderr=_on_stderr,
     )
 
     # Track text part state
@@ -150,20 +157,20 @@ async def run_orchestrator_turn(
     current_tool_name: str | None = None
     current_tool_input_json = ""  # Accumulate input JSON delta
 
-    # Determine prompt format based on whether we have content blocks
-    if isinstance(prompt, list):
-        # Use streaming mode for content blocks (files attached)
-        async def prompt_stream():
-            yield {
-                "type": "user",
-                "message": {"role": "user", "content": prompt},
-                "parent_tool_use_id": None,
-                "session_id": str(uuid.uuid4()),
-            }
-        prompt_input = prompt_stream()
+    # MCP servers require streaming input mode — always use an async generator
+    if isinstance(prompt, str):
+        prompt_content: str | list = prompt
     else:
-        # Use simple string mode for text-only messages
-        prompt_input = prompt
+        prompt_content = prompt  # list of content blocks
+
+    async def prompt_stream():
+        yield {
+            "type": "user",
+            "message": {"role": "user", "content": prompt_content},
+            "parent_tool_use_id": None,
+            "session_id": str(uuid.uuid4()),
+        }
+    prompt_input = prompt_stream()
 
     try:
         async for message in query(prompt=prompt_input, options=options):
@@ -262,6 +269,10 @@ async def run_orchestrator_turn(
         if text_started:
             yield {"type": "text-end", "id": text_part_id}
 
+        import logging, traceback
+        logging.getLogger(__name__).error(
+            "Orchestrator error:\n%s", traceback.format_exc()
+        )
         yield {"type": "error", "errorText": f"Agent error: {str(e)}"}
         yield {"type": "finish"}
 

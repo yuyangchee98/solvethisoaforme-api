@@ -20,7 +20,7 @@ _SUBAGENT_DESCRIPTIONS: dict[str, str] = {
 }
 
 _SUBAGENT_TOOLS: dict[str, list[str]] = {
-    "prior-art": ["Read", "Grep", "Glob", "Bash", "Write", "FetchPatent"],
+    "prior-art": ["Read", "Grep", "Glob", "Bash", "Write"],
 }
 
 _SUBAGENT_MODELS: dict[str, str] = {
