@@ -11,6 +11,7 @@ from .models import (
     Session,
     SessionStatus,
     Message,
+    MessagePart,
     MessageRole,
     ToolCall,
     UploadedDocument,
@@ -179,6 +180,7 @@ class SessionManager:
         role: MessageRole,
         content: str,
         tool_calls: list[dict] | None = None,
+        parts: list[dict] | None = None,
     ) -> Message:
         """Save a message to a session.
 
@@ -187,6 +189,7 @@ class SessionManager:
             role: The message role (user/assistant/system)
             content: The message content
             tool_calls: Optional list of tool call dicts
+            parts: Optional ordered list of parts (text segments + tool call refs)
 
         Returns:
             The saved message
@@ -195,13 +198,14 @@ class SessionManager:
 
         now = datetime.now(timezone.utc).isoformat()
         tool_calls_json = json.dumps(tool_calls) if tool_calls else None
+        parts_json = json.dumps(parts) if parts else None
 
         cursor = await db.execute(
             """
-            INSERT INTO messages (session_id, role, content, tool_calls, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO messages (session_id, role, content, tool_calls, parts, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (session_id, role.value, content, tool_calls_json, now),
+            (session_id, role.value, content, tool_calls_json, parts_json, now),
         )
         await db.commit()
 
@@ -217,12 +221,18 @@ class SessionManager:
         if tool_calls:
             tool_call_models = [ToolCall(**tc) for tc in tool_calls]
 
+        # Convert parts dicts to MessagePart models
+        part_models = None
+        if parts:
+            part_models = [MessagePart(**p) for p in parts]
+
         return Message(
             id=cursor.lastrowid,
             session_id=session_id,
             role=role,
             content=content,
             tool_calls=tool_call_models,
+            parts=part_models,
             created_at=datetime.fromisoformat(now),
         )
 
@@ -239,7 +249,7 @@ class SessionManager:
 
         cursor = await db.execute(
             """
-            SELECT id, session_id, role, content, tool_calls, created_at
+            SELECT id, session_id, role, content, tool_calls, parts, created_at
             FROM messages
             WHERE session_id = ?
             ORDER BY created_at ASC
@@ -257,6 +267,13 @@ class SessionManager:
                 tool_calls_list = json.loads(tool_calls_data)
                 tool_call_models = [ToolCall(**tc) for tc in tool_calls_list]
 
+            # Parse parts JSON if present
+            parts_data = row[5]
+            part_models = None
+            if parts_data:
+                parts_list = json.loads(parts_data)
+                part_models = [MessagePart(**p) for p in parts_list]
+
             messages.append(
                 Message(
                     id=row[0],
@@ -264,7 +281,8 @@ class SessionManager:
                     role=MessageRole(row[2]),
                     content=row[3],
                     tool_calls=tool_call_models,
-                    created_at=datetime.fromisoformat(row[5]),
+                    parts=part_models,
+                    created_at=datetime.fromisoformat(row[6]),
                 )
             )
 

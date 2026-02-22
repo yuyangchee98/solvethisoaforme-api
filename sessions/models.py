@@ -51,6 +51,14 @@ class ToolCall(BaseModel):
     output: str | None = None
 
 
+class MessagePart(BaseModel):
+    """An ordered part within a message (text segment or tool call reference)."""
+
+    type: str  # "text" or "tool-call"
+    text: str | None = None
+    toolCallId: str | None = None
+
+
 class Message(BaseModel):
     """A message in a session."""
 
@@ -59,6 +67,7 @@ class Message(BaseModel):
     role: MessageRole
     content: str
     tool_calls: list[ToolCall] = Field(default_factory=list)
+    parts: list[MessagePart] | None = None
     created_at: datetime
 
 
@@ -116,6 +125,7 @@ class MessageResponse(BaseModel):
     role: MessageRole
     content: str
     tool_calls: list[ToolCall] = Field(default_factory=list)
+    parts: list[MessagePart] | None = None
     created_at: datetime
     attachments: list["UploadedDocumentResponse"] = Field(default_factory=list)
 

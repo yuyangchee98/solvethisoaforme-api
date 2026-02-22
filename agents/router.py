@@ -302,6 +302,9 @@ async def send_message(
         message_id = str(uuid_mod.uuid4())
         full_response = ""
         tool_calls: dict[str, dict] = {}  # toolCallId -> data
+        # Track ordered parts: text segments interleaved with tool call refs
+        ordered_parts: list[dict] = []
+        pending_text = ""  # text accumulated since last tool call
 
         # Start message event
         yield f"data: {json.dumps({'type': 'start', 'messageId': message_id})}\n\n"
@@ -311,12 +314,18 @@ async def send_message(
 
             # Accumulate text for saving
             if event_type == "text-delta":
-                full_response += event.get("delta", "")
+                delta = event.get("delta", "")
+                full_response += delta
+                pending_text += delta
 
-            # Capture tool call input
+            # Capture tool call input — flush pending text first
             elif event_type == "tool-input-available":
                 tool_call_id = event.get("toolCallId")
                 if tool_call_id:
+                    if pending_text:
+                        ordered_parts.append({"type": "text", "text": pending_text})
+                        pending_text = ""
+                    ordered_parts.append({"type": "tool-call", "toolCallId": tool_call_id})
                     tool_calls[tool_call_id] = {
                         "toolCallId": tool_call_id,
                         "toolName": event.get("toolName"),
@@ -332,6 +341,10 @@ async def send_message(
 
             yield f"data: {json.dumps(event)}\n\n"
 
+        # Flush any remaining text
+        if pending_text:
+            ordered_parts.append({"type": "text", "text": pending_text})
+
         # Signal end of stream
         yield "data: [DONE]\n\n"
 
@@ -342,6 +355,7 @@ async def send_message(
                 MessageRole.ASSISTANT,
                 full_response,
                 tool_calls=list(tool_calls.values()) if tool_calls else None,
+                parts=ordered_parts if ordered_parts else None,
             )
 
     return StreamingResponse(
@@ -377,6 +391,7 @@ async def get_messages(session_id: str, user: User = Depends(require_subscriptio
                 role=msg.role,
                 content=msg.content,
                 tool_calls=msg.tool_calls,
+                parts=msg.parts,
                 created_at=msg.created_at,
                 attachments=[
                     UploadedDocumentResponse(
