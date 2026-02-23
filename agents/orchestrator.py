@@ -146,6 +146,7 @@ async def run_orchestrator_turn(
         agents=get_agent_definitions(),  # Subagent definitions for Task tool
         mcp_servers={"patent-tools": patent_server},
         stderr=_on_stderr,
+        max_buffer_size=50 * 1024 * 1024,  # 50 MB — accommodate large subagent results
     )
 
     # Track text part state
