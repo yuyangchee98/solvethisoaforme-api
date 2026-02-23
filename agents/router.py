@@ -434,13 +434,17 @@ async def list_workspace_files(
 
 @router.get("/sessions/{session_id}/files/{file_path:path}")
 async def download_file(
-    session_id: str, file_path: str, user: User = Depends(require_subscription)
+    session_id: str,
+    file_path: str,
+    format: str | None = None,
+    user: User = Depends(require_subscription),
 ):
     """Download a file from the session workspace.
 
     Args:
         session_id: The session ID
         file_path: Path to the file within the workspace
+        format: Optional output format (e.g. "docx" to convert .md files)
     """
     manager = get_session_manager()
 
@@ -463,6 +467,23 @@ async def download_file(
 
     if not full_path.is_file():
         raise HTTPException(status_code=400, detail="Not a file")
+
+    if format == "docx":
+        if full_path.suffix.lower() not in (".md", ".mdx"):
+            raise HTTPException(
+                status_code=400,
+                detail="DOCX conversion is only supported for Markdown files",
+            )
+        from processors.md_to_docx import markdown_to_docx
+
+        md_text = full_path.read_text(encoding="utf-8")
+        docx_buf = markdown_to_docx(md_text)
+        docx_filename = full_path.stem + ".docx"
+        return StreamingResponse(
+            docx_buf,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{docx_filename}"'},
+        )
 
     return FileResponse(
         path=full_path,
