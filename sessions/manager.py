@@ -288,20 +288,6 @@ class SessionManager:
 
         return messages
 
-    async def get_conversation_history(
-        self, session_id: str
-    ) -> list[dict[str, str]]:
-        """Get conversation history in a format suitable for LLM context.
-
-        Args:
-            session_id: The session ID
-
-        Returns:
-            List of dicts with 'role' and 'content' keys
-        """
-        messages = await self.get_messages(session_id)
-        return [{"role": msg.role.value, "content": msg.content} for msg in messages]
-
     async def save_uploaded_document(
         self,
         session_id: str,

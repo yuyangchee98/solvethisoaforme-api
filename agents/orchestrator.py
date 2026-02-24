@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import AsyncIterator, Any
 
 from claude_agent_sdk import (
-    ClaudeAgentOptions,
-    query,
     AssistantMessage,
     UserMessage,
     ResultMessage,
@@ -17,15 +15,14 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 
-from .prompts import get_orchestrator_prompt, get_agent_definitions
-from .tools import create_patent_tools_server
+from .client_manager import AgentClientManager
 
 
 # Supported image MIME types for Claude vision
 IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
 
-def _build_message_content(
+def build_message_content(
     user_message: str,
     uploaded_files: list[dict[str, Any]] | None,
 ) -> str | list[dict[str, Any]]:
@@ -96,60 +93,18 @@ def _build_message_content(
     return content
 
 
-async def run_orchestrator_turn(
+async def stream_agent_response(
+    client_manager: AgentClientManager,
+    session_id: str,
     workspace: Path,
-    conversation_history: list[dict],
-    user_message: str,
-    uploaded_files: list[dict[str, Any]] | None = None,
+    message_content: str | list[dict],
 ) -> AsyncIterator[dict]:
-    """Run one turn of the orchestrator agent.
+    """Send message via persistent client, yield UI stream events.
 
-    Yields UI Message Stream Protocol events directly.
-
-    Args:
-        workspace: Path to the session workspace directory
-        conversation_history: Previous conversation messages
-        user_message: The new user message to process
-        uploaded_files: Optional list of uploaded file metadata for native content blocks
-
-    Yields:
-        UI Message Stream Protocol event dicts:
-        - {"type": "text-start", "id": "..."}
-        - {"type": "text-delta", "id": "...", "delta": "..."}
-        - {"type": "text-end", "id": "..."}
-        - {"type": "tool-input-start", "toolCallId": "...", "toolName": "..."}
-        - {"type": "tool-input-available", "toolCallId": "...", "toolName": "...", "input": {...}}
-        - {"type": "tool-output-available", "toolCallId": "...", "output": "..."}
-        - {"type": "error", "errorText": "..."}
-        - {"type": "finish"}
+    Translates SDK Message objects into the UI Message Stream Protocol
+    events that the frontend expects (text-start, text-delta, text-end,
+    tool-input-start, tool-input-available, tool-output-available, finish).
     """
-    # Build the message content with native file blocks if files are uploaded
-    message_content = _build_message_content(user_message, uploaded_files)
-
-    # Build the prompt with conversation history
-    prompt = _format_prompt(conversation_history, message_content)
-
-    patent_server = create_patent_tools_server(workspace)
-
-    import logging as _logging
-    _log = _logging.getLogger(__name__)
-
-    def _on_stderr(line: str) -> None:
-        _log.error("CLI stderr: %s", line.rstrip())
-
-    options = ClaudeAgentOptions(
-        system_prompt=get_orchestrator_prompt(),
-        cwd=str(workspace),
-        allowed_tools=["Read", "Write", "Grep", "Glob", "Bash", "Task", "mcp__patent-tools__FetchPatent"],
-        permission_mode="acceptEdits",
-        max_turns=50,
-        include_partial_messages=True,  # Enable token-level streaming
-        agents=get_agent_definitions(),  # Subagent definitions for Task tool
-        mcp_servers={"patent-tools": patent_server},
-        stderr=_on_stderr,
-        max_buffer_size=50 * 1024 * 1024,  # 50 MB — accommodate large subagent results
-    )
-
     # Track text part state
     text_part_id = str(uuid.uuid4())
     text_started = False
@@ -157,36 +112,19 @@ async def run_orchestrator_turn(
     # Track current tool call
     current_tool_id: str | None = None
     current_tool_name: str | None = None
-    current_tool_input_json = ""  # Accumulate input JSON delta
+    current_tool_input_json = ""
 
     # Track announced tool IDs so we only emit outputs for tools the frontend knows about
-    # (subagent internal tool results can leak through the stream)
     announced_tool_ids: set[str] = set()
 
-    # MCP servers require streaming input mode — always use an async generator
-    if isinstance(prompt, str):
-        prompt_content: str | list = prompt
-    else:
-        prompt_content = prompt  # list of content blocks
-
-    async def prompt_stream():
-        yield {
-            "type": "user",
-            "message": {"role": "user", "content": prompt_content},
-            "parent_tool_use_id": None,
-            "session_id": str(uuid.uuid4()),
-        }
-    prompt_input = prompt_stream()
-
     try:
-        async for message in query(prompt=prompt_input, options=options):
+        async for message in client_manager.send_message(session_id, workspace, message_content):
             parent_id = getattr(message, "parent_tool_use_id", None)
 
             # Handle UserMessage which contains tool results
             if isinstance(message, UserMessage):
                 for block in message.content:
                     if isinstance(block, ToolResultBlock):
-                        # Only emit output for tools we announced to the frontend
                         if block.tool_use_id not in announced_tool_ids:
                             continue
                         content = getattr(block, "content", "")
@@ -202,8 +140,7 @@ async def run_orchestrator_turn(
                         }
 
             if isinstance(message, StreamEvent):
-                # Skip subagent streaming events — they're handled via
-                # AssistantMessage/UserMessage with parent_tool_use_id
+                # Skip subagent streaming events
                 if parent_id is not None:
                     continue
 
@@ -238,21 +175,16 @@ async def run_orchestrator_turn(
                     if delta_type == "text_delta":
                         text = delta.get("text", "")
                         if text:
-                            # Start text part on first text chunk
                             if not text_started:
                                 yield {"type": "text-start", "id": text_part_id}
                                 text_started = True
-
                             yield {"type": "text-delta", "id": text_part_id, "delta": text}
 
                     elif delta_type == "input_json_delta":
-                        # Accumulate tool input JSON
                         current_tool_input_json += delta.get("partial_json", "")
 
                 elif event_type == "content_block_stop":
-                    # Content block finished
                     if current_tool_id:
-                        # Parse accumulated input and emit tool-input-available
                         try:
                             tool_input = json.loads(current_tool_input_json) if current_tool_input_json else {}
                         except json.JSONDecodeError:
@@ -264,7 +196,6 @@ async def run_orchestrator_turn(
                             "toolName": current_tool_name,
                             "input": tool_input,
                         }
-                        # Don't emit output here - wait for ToolResultBlock
                         current_tool_id = None
                         current_tool_name = None
                         current_tool_input_json = ""
@@ -293,7 +224,6 @@ async def run_orchestrator_turn(
                             }
 
             elif isinstance(message, ResultMessage):
-                # End text part if still active
                 if text_started:
                     yield {"type": "text-end", "id": text_part_id}
                     text_started = False
@@ -301,7 +231,6 @@ async def run_orchestrator_turn(
                 yield {"type": "finish"}
 
     except Exception as e:
-        # End text part if active before error
         if text_started:
             yield {"type": "text-end", "id": text_part_id}
 
@@ -311,63 +240,3 @@ async def run_orchestrator_turn(
         )
         yield {"type": "error", "errorText": f"Agent error: {str(e)}"}
         yield {"type": "finish"}
-
-
-def _format_prompt(
-    conversation_history: list[dict],
-    user_message: str | list[dict[str, Any]],
-) -> str | list[dict[str, Any]]:
-    """Format the conversation history and new message into a prompt.
-
-    Args:
-        conversation_history: Previous messages as list of {role, content}
-        user_message: The new user message (string or list of content blocks)
-
-    Returns:
-        Formatted prompt - string if user_message is string, otherwise
-        prepends conversation history to content blocks
-    """
-    # Build conversation history prefix
-    history_parts = []
-    if conversation_history:
-        history_parts.append("<conversation_history>")
-        for msg in conversation_history:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            history_parts.append(f"<{role}>{content}</{role}>")
-        history_parts.append("</conversation_history>")
-        history_parts.append("")
-
-    # If user_message is a string, return formatted string
-    if isinstance(user_message, str):
-        history_parts.append(f"<user_message>{user_message}</user_message>")
-        return "\n".join(history_parts)
-
-    # If user_message is a list of content blocks, prepend history as text block
-    if history_parts:
-        history_text = "\n".join(history_parts)
-        # Find the last text block (which contains the actual user message)
-        # and prepend the history to it
-        result = []
-        for i, block in enumerate(user_message):
-            if block.get("type") == "text" and i == len(user_message) - 1:
-                # This is the last text block - prepend history
-                result.append({
-                    "type": "text",
-                    "text": f"{history_text}\n<user_message>{block['text']}</user_message>"
-                })
-            else:
-                result.append(block)
-        return result
-
-    # No history, just wrap user message text in tags
-    result = []
-    for i, block in enumerate(user_message):
-        if block.get("type") == "text" and i == len(user_message) - 1:
-            result.append({
-                "type": "text",
-                "text": f"<user_message>{block['text']}</user_message>"
-            })
-        else:
-            result.append(block)
-    return result

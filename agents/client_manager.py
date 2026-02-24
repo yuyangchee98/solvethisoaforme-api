@@ -1,0 +1,191 @@
+"""Manages persistent ClaudeSDKClient instances per session.
+
+Each session gets its own long-lived CLI subprocess that maintains
+full conversation state, eliminating the need for XML history hacks.
+"""
+
+import asyncio
+import logging
+import time
+from pathlib import Path
+from typing import AsyncIterator
+
+from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+from claude_agent_sdk._errors import CLIConnectionError
+from claude_agent_sdk.types import Message
+
+from .prompts import get_orchestrator_prompt, get_agent_definitions
+from .tools import create_patent_tools_server
+
+log = logging.getLogger(__name__)
+
+# Singleton
+_client_manager: "AgentClientManager | None" = None
+
+
+class AgentClientManager:
+    """Manages persistent ClaudeSDKClient instances, one per session."""
+
+    def __init__(self) -> None:
+        self._clients: dict[str, ClaudeSDKClient] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._last_active: dict[str, float] = {}
+        self._cleanup_task: asyncio.Task | None = None
+
+    def _get_lock(self, session_id: str) -> asyncio.Lock:
+        if session_id not in self._locks:
+            self._locks[session_id] = asyncio.Lock()
+        return self._locks[session_id]
+
+    def _build_options(self, workspace: Path) -> ClaudeAgentOptions:
+        patent_server = create_patent_tools_server(workspace)
+
+        def _on_stderr(line: str) -> None:
+            log.error("CLI stderr: %s", line.rstrip())
+
+        return ClaudeAgentOptions(
+            system_prompt=get_orchestrator_prompt(),
+            cwd=str(workspace),
+            allowed_tools=[
+                "Read", "Write", "Grep", "Glob", "Bash", "Task",
+                "mcp__patent-tools__FetchPatent",
+            ],
+            permission_mode="acceptEdits",
+            max_turns=50,
+            include_partial_messages=True,
+            agents=get_agent_definitions(),
+            mcp_servers={"patent-tools": patent_server},
+            stderr=_on_stderr,
+            max_buffer_size=50 * 1024 * 1024,
+        )
+
+    async def get_or_create(
+        self, session_id: str, workspace: Path
+    ) -> ClaudeSDKClient:
+        """Return an existing connected client, or create a new one."""
+        client = self._clients.get(session_id)
+        if client is not None:
+            return client
+
+        options = self._build_options(workspace)
+        client = ClaudeSDKClient(options=options)
+        await client.connect()
+        self._clients[session_id] = client
+        self._last_active[session_id] = time.monotonic()
+        log.info("Created new ClaudeSDKClient for session %s", session_id)
+        return client
+
+    async def send_message(
+        self,
+        session_id: str,
+        workspace: Path,
+        content: str | list[dict],
+    ) -> AsyncIterator[Message]:
+        """Send a message and yield response messages.
+
+        Acquires a per-session lock so concurrent requests are serialized.
+        On CLIConnectionError, reconnects once and retries.
+        """
+        lock = self._get_lock(session_id)
+        async with lock:
+            try:
+                async for msg in self._do_send(session_id, workspace, content):
+                    yield msg
+            except CLIConnectionError:
+                log.warning(
+                    "CLIConnectionError for session %s — reconnecting",
+                    session_id,
+                )
+                await self._force_disconnect(session_id)
+                try:
+                    async for msg in self._do_send(session_id, workspace, content):
+                        yield msg
+                except CLIConnectionError:
+                    log.error(
+                        "Retry also failed for session %s", session_id
+                    )
+                    await self._force_disconnect(session_id)
+                    raise
+
+    @staticmethod
+    async def _wrap_as_prompt(content: str | list[dict]) -> AsyncIterator[dict]:
+        """Wrap content into the async iterable format that client.query() expects.
+
+        client.query() accepts str (auto-wrapped) or AsyncIterable[dict] where
+        each dict is {"type": "user", "message": {"role": "user", "content": ...}}.
+        When content is a list of content blocks (e.g. with file attachments),
+        we must use the async iterable form.
+        """
+        yield {
+            "type": "user",
+            "message": {"role": "user", "content": content},
+        }
+
+    async def _do_send(
+        self,
+        session_id: str,
+        workspace: Path,
+        content: str | list[dict],
+    ) -> AsyncIterator[Message]:
+        """Send content to client and yield response messages."""
+        client = await self.get_or_create(session_id, workspace)
+        # String prompts can be passed directly; list content blocks
+        # (file uploads) must be wrapped as an async iterable of message dicts.
+        if isinstance(content, str):
+            await client.query(content)
+        else:
+            await client.query(self._wrap_as_prompt(content))
+        self._last_active[session_id] = time.monotonic()
+        async for msg in client.receive_response():
+            yield msg
+        self._last_active[session_id] = time.monotonic()
+
+    async def disconnect(self, session_id: str) -> None:
+        """Disconnect and remove a session's client."""
+        await self._force_disconnect(session_id)
+
+    async def _force_disconnect(self, session_id: str) -> None:
+        client = self._clients.pop(session_id, None)
+        self._last_active.pop(session_id, None)
+        if client is not None:
+            try:
+                await client.disconnect()
+            except Exception:
+                log.debug("Error disconnecting session %s", session_id, exc_info=True)
+
+    async def cleanup_idle(self, max_idle_seconds: float = 300) -> None:
+        """Disconnect clients that have been idle too long."""
+        now = time.monotonic()
+        idle_sessions = [
+            sid
+            for sid, last in self._last_active.items()
+            if now - last > max_idle_seconds
+        ]
+        for sid in idle_sessions:
+            log.info("Disconnecting idle session %s", sid)
+            await self._force_disconnect(sid)
+
+    async def run_cleanup_loop(self, interval: float = 60) -> None:
+        """Background loop that periodically cleans up idle clients."""
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self.cleanup_idle()
+            except Exception:
+                log.warning("Cleanup loop error", exc_info=True)
+
+    async def shutdown(self) -> None:
+        """Disconnect all clients. Call on app shutdown."""
+        session_ids = list(self._clients.keys())
+        for sid in session_ids:
+            await self._force_disconnect(sid)
+        self._locks.clear()
+        log.info("AgentClientManager shut down — %d clients cleaned up", len(session_ids))
+
+
+def get_client_manager() -> AgentClientManager:
+    """Return the singleton client manager."""
+    global _client_manager
+    if _client_manager is None:
+        _client_manager = AgentClientManager()
+    return _client_manager

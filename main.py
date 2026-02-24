@@ -18,6 +18,7 @@ from models import AnalyzeClaimsRequest, AnalyzeClaimsResponse
 from core.analyzer import ClaimAnalyzer, register_default_validators
 from sessions import init_db, close_db
 from agents import agents_router
+from agents.client_manager import get_client_manager
 from auth.db import init_auth_db
 from auth.users import fastapi_users, auth_backend, current_active_user
 from auth.schemas import UserRead, UserCreate, UserUpdate
@@ -29,14 +30,21 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:4321")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifespan events."""
+    import asyncio
+
     # Startup
     register_default_validators()
     await init_db()
     await init_auth_db()
 
+    # Start background cleanup loop for idle agent clients
+    cleanup_task = asyncio.create_task(get_client_manager().run_cleanup_loop())
+
     yield
 
     # Shutdown
+    cleanup_task.cancel()
+    await get_client_manager().shutdown()
     await close_db()
 
 

@@ -25,7 +25,8 @@ from sessions import (
 from processors import get_processor_registry
 from auth.users import current_active_user
 from auth.models import User
-from .orchestrator import run_orchestrator_turn
+from .orchestrator import stream_agent_response, build_message_content
+from .client_manager import get_client_manager
 
 
 async def require_subscription(user: User = Depends(current_active_user)) -> User:
@@ -160,6 +161,9 @@ async def delete_session(session_id: str, user: User = Depends(require_subscript
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # Disconnect the persistent CLI subprocess for this session
+    await get_client_manager().disconnect(session_id)
+
     return DeleteSessionResponse(status="deleted")
 
 
@@ -293,9 +297,6 @@ async def send_message(
             file_size=file_on_disk.stat().st_size,
         )
 
-    # Get conversation history for context
-    history = await manager.get_conversation_history(session_id)
-
     async def event_stream():
         """Generate SSE events from orchestrator output."""
         import uuid as uuid_mod
@@ -309,7 +310,9 @@ async def send_message(
         # Start message event
         yield f"data: {json.dumps({'type': 'start', 'messageId': message_id})}\n\n"
 
-        async for event in run_orchestrator_turn(workspace, history, agent_content, uploaded_files):
+        message_content = build_message_content(agent_content, uploaded_files)
+        client_manager = get_client_manager()
+        async for event in stream_agent_response(client_manager, session_id, workspace, message_content):
             event_type = event.get("type")
 
             # Accumulate text for saving
