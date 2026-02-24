@@ -186,8 +186,7 @@ async def run_orchestrator_turn(
             if isinstance(message, UserMessage):
                 for block in message.content:
                     if isinstance(block, ToolResultBlock):
-                        # Only emit output for tools we announced to the frontend;
-                        # subagent internal tool results have IDs we never announced.
+                        # Only emit output for tools we announced to the frontend
                         if block.tool_use_id not in announced_tool_ids:
                             continue
                         content = getattr(block, "content", "")
@@ -203,6 +202,11 @@ async def run_orchestrator_turn(
                         }
 
             if isinstance(message, StreamEvent):
+                # Skip subagent streaming events — they're handled via
+                # AssistantMessage/UserMessage with parent_tool_use_id
+                if parent_id is not None:
+                    continue
+
                 event = message.event
                 event_type = event.get("type")
 
@@ -267,10 +271,9 @@ async def run_orchestrator_turn(
 
             elif isinstance(message, AssistantMessage):
                 if parent_id is not None:
-                    # Subagent tool calls — announce them so frontend shows progress
+                    # Subagent tool calls — announce as regular tool cards
                     for block in message.content:
                         if isinstance(block, ToolUseBlock):
-                            # End text part if active before tool call
                             if text_started:
                                 yield {"type": "text-end", "id": text_part_id}
                                 text_started = False
