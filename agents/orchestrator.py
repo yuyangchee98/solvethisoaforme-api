@@ -13,6 +13,7 @@ from claude_agent_sdk import (
     UserMessage,
     ResultMessage,
     ToolResultBlock,
+    ToolUseBlock,
 )
 from claude_agent_sdk.types import StreamEvent
 
@@ -179,6 +180,8 @@ async def run_orchestrator_turn(
 
     try:
         async for message in query(prompt=prompt_input, options=options):
+            parent_id = getattr(message, "parent_tool_use_id", None)
+
             # Handle UserMessage which contains tool results
             if isinstance(message, UserMessage):
                 for block in message.content:
@@ -263,8 +266,28 @@ async def run_orchestrator_turn(
                         current_tool_input_json = ""
 
             elif isinstance(message, AssistantMessage):
-                # AssistantMessage contains ToolUseBlock (handled via StreamEvent)
-                pass
+                if parent_id is not None:
+                    # Subagent tool calls — announce them so frontend shows progress
+                    for block in message.content:
+                        if isinstance(block, ToolUseBlock):
+                            # End text part if active before tool call
+                            if text_started:
+                                yield {"type": "text-end", "id": text_part_id}
+                                text_started = False
+                                text_part_id = str(uuid.uuid4())
+
+                            announced_tool_ids.add(block.id)
+                            yield {
+                                "type": "tool-input-start",
+                                "toolCallId": block.id,
+                                "toolName": block.name,
+                            }
+                            yield {
+                                "type": "tool-input-available",
+                                "toolCallId": block.id,
+                                "toolName": block.name,
+                                "input": block.input,
+                            }
 
             elif isinstance(message, ResultMessage):
                 # End text part if still active
