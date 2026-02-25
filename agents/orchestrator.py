@@ -105,6 +105,10 @@ async def stream_agent_response(
     events that the frontend expects (text-start, text-delta, text-end,
     tool-input-start, tool-input-available, tool-output-available, finish).
     """
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    _log.warning("[%s] stream_agent_response: starting", session_id[:8])
+
     # Track text part state
     text_part_id = str(uuid.uuid4())
     text_started = False
