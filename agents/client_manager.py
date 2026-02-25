@@ -118,9 +118,9 @@ class _SessionWorker:
             log.warning("[%s] worker: turn done (%d msgs)", self._sid, msg_count)
 
         except CLIConnectionError:
-            # Propagate to caller, then re-raise to exit the worker loop
+            # Propagate to caller, then re-raise to exit the worker loop.
+            # finally block handles _DONE sentinel.
             await output_q.put(CLIConnectionError("CLI connection lost"))
-            await output_q.put(_DONE)
             raise
         except Exception as e:
             log.error("[%s] worker: turn error: %s", self._sid, e, exc_info=True)
@@ -146,11 +146,17 @@ class _SessionWorker:
         This can be called from any asyncio Task — it communicates with the
         worker via Queues so the actual SDK calls stay in the worker Task.
         """
+        if not self.alive:
+            raise CLIConnectionError("Worker is not running")
+
         output_q: asyncio.Queue = asyncio.Queue()
         await self._input.put((content, output_q))
 
         while True:
-            item = await output_q.get()
+            try:
+                item = await asyncio.wait_for(output_q.get(), timeout=300)
+            except asyncio.TimeoutError:
+                raise CLIConnectionError("Worker did not respond within timeout")
             if item is _DONE:
                 break
             if isinstance(item, BaseException):
@@ -296,6 +302,7 @@ class AgentClientManager:
     async def _force_disconnect(self, session_id: str) -> None:
         worker = self._workers.pop(session_id, None)
         self._last_active.pop(session_id, None)
+        self._locks.pop(session_id, None)
         if worker is not None:
             try:
                 await worker.stop()
@@ -311,6 +318,10 @@ class AgentClientManager:
             if now - last > max_idle_seconds
         ]
         for sid in idle_sessions:
+            # Don't kill sessions that are actively processing a turn
+            lock = self._locks.get(sid)
+            if lock and lock.locked():
+                continue
             log.warning("Disconnecting idle session %s", sid)
             await self._force_disconnect(sid)
 
