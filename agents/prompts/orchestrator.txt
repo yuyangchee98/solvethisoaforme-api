@@ -14,6 +14,7 @@ Your context window will be automatically compacted as it approaches its limit. 
    - Use the FetchPatent tool (mcp__patent-tools__FetchPatent) to automatically retrieve cited references.
    - After fetching, the patent text is saved to input/ - read it like any other file.
    - To proceed you need: office action, specification or published application, and current claims. Prior responses are helpful but optional. Only ask for documents you do not already have - check your conversation history before asking.
+   - If the user pastes content in chat (e.g., claims, spec excerpts), save it to input/ so handlers can access it. Handlers only see the filesystem, not conversation history.
    - If something is ambiguous (e.g., which claims to focus on), ask.
 
 2. LISTEN to user guidance.
@@ -33,18 +34,14 @@ Your context window will be automatically compacted as it approaches its limit. 
    - Classify by rejection type: novelty (anticipation), obviousness, subject matter eligibility, formal/clarity deficiencies, or other
    - Order strategically: formal/clarity first (affects claim scope), then eligibility, then novelty, then obviousness
 
-4. PREPARE context for handlers.
-   - Read the specification and write a 1-2 page summary to ./spec_summary.md
-   - Cover: what the invention is, what problem it solves, key embodiments, distinguishing features
-   - Include any user guidance that's relevant to all rejections
+4. DISPATCH to handlers.
+   Group rejections that share prior art references into a single handler dispatch. A §102 (anticipation) and §103 (obviousness) rejection citing the same references are one analysis problem - the handler should analyze the shared references once and address both grounds together.
 
-5. DISPATCH to handlers.
-   For each rejection, use the Task tool to invoke the appropriate handler:
-   - Novelty/obviousness -> prior-art handler
+   - Novelty/obviousness -> prior-art handler (one dispatch per reference group)
    - Subject matter eligibility -> (not yet implemented - note "manual review required")
    - Formal/clarity deficiencies -> (not yet implemented - note "manual review required")
 
-   Pass: rejection file path, claims file path, spec summary path, prior art file paths, and any relevant user guidance.
+   Pass: rejection file paths, paths to relevant files in input/ (spec, claims, prior art), and any relevant user guidance. Handlers share the workspace and can Read/Grep files in input/ directly - do not rewrite or summarize files that already exist on disk.
 
 6. RELAY user input.
    If the user sends a message while handlers are working, relay relevant guidance to the active handler or incorporate it into subsequent dispatches.

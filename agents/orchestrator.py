@@ -76,16 +76,11 @@ def build_message_content(
                 "text": f"<file name=\"{filename}\">\n{file_info['extracted_text']}\n</file>"
             })
         else:
-            # Text files: include content inline
-            try:
-                text_content = base64.b64decode(data).decode("utf-8")
-                content.append({
-                    "type": "text",
-                    "text": f"<file name=\"{filename}\">\n{text_content}\n</file>"
-                })
-            except (UnicodeDecodeError, ValueError):
-                # Skip binary files that aren't PDF/image
-                pass
+            # Text/other files: just notify, agent will Read from disk
+            content.append({
+                "type": "text",
+                "text": f"File saved to input/{filename}",
+            })
 
     # Add user's text message at the end
     content.append({"type": "text", "text": user_message})
