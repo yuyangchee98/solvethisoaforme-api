@@ -2,13 +2,18 @@
 
 Each session gets its own long-lived CLI subprocess that maintains
 full conversation state, eliminating the need for XML history hacks.
+
+IMPORTANT: The Claude Agent SDK requires all operations on a client
+to happen within the same asyncio Task (anyio cancel scope limitation).
+Each session therefore gets a dedicated worker Task that owns the client.
+HTTP request handlers communicate with the worker via asyncio Queues.
 """
 
 import asyncio
 import logging
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 from claude_agent_sdk._errors import CLIConnectionError
@@ -19,24 +24,168 @@ from .tools import create_patent_tools_server
 
 log = logging.getLogger(__name__)
 
+# Sentinel that signals "turn is complete, no more messages"
+_DONE = object()
+
 # Singleton
 _client_manager: "AgentClientManager | None" = None
 
 
-class _SessionState:
-    """Holds a client and its long-lived message iterator for one session."""
-    __slots__ = ("client", "messages")
+class _SessionWorker:
+    """A dedicated asyncio Task that owns a ClaudeSDKClient for one session.
 
-    def __init__(self, client: ClaudeSDKClient, messages: AsyncIterator[Message]) -> None:
-        self.client = client
-        self.messages = messages
+    All SDK operations (connect, query, receive_response, disconnect) run
+    inside this single Task, satisfying the anyio same-task requirement.
+    HTTP handlers interact via asyncio Queues.
+    """
+
+    def __init__(self, session_id: str, options: ClaudeAgentOptions) -> None:
+        self._session_id = session_id
+        self._sid = session_id[:8]
+        self._options = options
+        # Input: (content, output_queue) pairs, or None to shutdown
+        self._input: asyncio.Queue[tuple[str | list[dict], asyncio.Queue] | None] = (
+            asyncio.Queue()
+        )
+        self._task: asyncio.Task | None = None
+        self._ready = asyncio.Event()
+        self._connect_error: BaseException | None = None
+
+    async def start(self) -> None:
+        """Start the worker Task and wait until the client is connected."""
+        self._task = asyncio.create_task(self._run(), name=f"sdk-worker-{self._sid}")
+        await self._ready.wait()
+        if self._connect_error:
+            raise self._connect_error
+
+    # ------------------------------------------------------------------
+    # Worker loop (runs in its own Task)
+    # ------------------------------------------------------------------
+
+    async def _run(self) -> None:
+        client = ClaudeSDKClient(options=self._options)
+        try:
+            await client.connect()
+        except BaseException as e:
+            self._connect_error = e
+            self._ready.set()
+            return
+
+        self._ready.set()
+        log.warning("[%s] worker: connected", self._sid)
+
+        try:
+            while True:
+                item = await self._input.get()
+                if item is None:
+                    log.warning("[%s] worker: shutdown signal received", self._sid)
+                    break
+
+                content, output_q = item
+                try:
+                    await self._handle_turn(client, content, output_q)
+                except CLIConnectionError:
+                    log.warning("[%s] worker: CLIConnectionError, exiting", self._sid)
+                    break
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:
+                log.debug("[%s] worker: error during disconnect", self._sid, exc_info=True)
+            log.warning("[%s] worker: stopped", self._sid)
+
+    async def _handle_turn(
+        self,
+        client: ClaudeSDKClient,
+        content: str | list[dict],
+        output_q: asyncio.Queue,
+    ) -> None:
+        """Execute one turn: query + stream response back via output_q."""
+        content_desc = "str" if isinstance(content, str) else f"list[{len(content)} blocks]"
+        log.warning("[%s] worker: query(%s)", self._sid, content_desc)
+
+        try:
+            if isinstance(content, str):
+                await client.query(content)
+            else:
+                await client.query(self._make_prompt(content))
+
+            log.warning("[%s] worker: reading response", self._sid)
+            msg_count = 0
+            async for msg in client.receive_response():
+                msg_count += 1
+                await output_q.put(msg)
+            log.warning("[%s] worker: turn done (%d msgs)", self._sid, msg_count)
+
+        except CLIConnectionError:
+            # Propagate to caller, then re-raise to exit the worker loop
+            await output_q.put(CLIConnectionError("CLI connection lost"))
+            await output_q.put(_DONE)
+            raise
+        except Exception as e:
+            log.error("[%s] worker: turn error: %s", self._sid, e, exc_info=True)
+            await output_q.put(e)
+        finally:
+            await output_q.put(_DONE)
+
+    @staticmethod
+    async def _make_prompt(content: list[dict]) -> AsyncIterator[dict]:
+        """Wrap list content blocks into the async iterable format query() expects."""
+        yield {
+            "type": "user",
+            "message": {"role": "user", "content": content},
+        }
+
+    # ------------------------------------------------------------------
+    # Public interface (called from HTTP handler Tasks)
+    # ------------------------------------------------------------------
+
+    async def send(self, content: str | list[dict]) -> AsyncIterator[Message]:
+        """Send content and yield response Messages.
+
+        This can be called from any asyncio Task — it communicates with the
+        worker via Queues so the actual SDK calls stay in the worker Task.
+        """
+        output_q: asyncio.Queue = asyncio.Queue()
+        await self._input.put((content, output_q))
+
+        while True:
+            item = await output_q.get()
+            if item is _DONE:
+                break
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+
+    async def stop(self) -> None:
+        """Ask the worker to shut down and wait for it to finish."""
+        if self._task is None or self._task.done():
+            return
+        await self._input.put(None)
+        try:
+            await asyncio.wait_for(self._task, timeout=15)
+        except asyncio.TimeoutError:
+            log.warning("[%s] worker: timed out waiting for shutdown, cancelling", self._sid)
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+
+    @property
+    def alive(self) -> bool:
+        return self._task is not None and not self._task.done()
 
 
 class AgentClientManager:
-    """Manages persistent ClaudeSDKClient instances, one per session."""
+    """Manages persistent ClaudeSDKClient instances, one per session.
+
+    Each session's client runs inside a dedicated _SessionWorker Task
+    to satisfy the anyio same-Task requirement for cancel scopes.
+    """
 
     def __init__(self) -> None:
-        self._sessions: dict[str, _SessionState] = {}
+        self._workers: dict[str, _SessionWorker] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._last_active: dict[str, float] = {}
 
@@ -67,32 +216,25 @@ class AgentClientManager:
             max_buffer_size=50 * 1024 * 1024,
         )
 
-    async def _create_session(
+    async def _get_or_create_worker(
         self, session_id: str, workspace: Path
-    ) -> _SessionState:
-        """Create a new client + long-lived message iterator."""
-        options = self._build_options(workspace)
-        client = ClaudeSDKClient(options=options)
-        await client.connect()
-        # Create ONE message iterator that lives for the entire session.
-        # This is critical: anyio MemoryObjectReceiveStream closes when
-        # an async-for iterator over it is garbage-collected. Using
-        # receive_response() per turn would create/destroy iterators and
-        # kill the stream on the second turn.
-        messages = client.receive_messages()
-        state = _SessionState(client, messages)
-        self._sessions[session_id] = state
-        self._last_active[session_id] = time.monotonic()
-        log.warning("Created new ClaudeSDKClient for session %s", session_id)
-        return state
+    ) -> _SessionWorker:
+        worker = self._workers.get(session_id)
+        if worker is not None and worker.alive:
+            return worker
 
-    async def _get_or_create(
-        self, session_id: str, workspace: Path
-    ) -> _SessionState:
-        state = self._sessions.get(session_id)
-        if state is not None:
-            return state
-        return await self._create_session(session_id, workspace)
+        # Clean up dead worker if needed
+        if worker is not None:
+            log.warning("[%s] worker died, recreating", session_id[:8])
+            self._workers.pop(session_id, None)
+
+        options = self._build_options(workspace)
+        worker = _SessionWorker(session_id, options)
+        await worker.start()
+        self._workers[session_id] = worker
+        self._last_active[session_id] = time.monotonic()
+        log.warning("Created worker for session %s", session_id)
+        return worker
 
     async def send_message(
         self,
@@ -103,7 +245,7 @@ class AgentClientManager:
         """Send a message and yield response messages.
 
         Acquires a per-session lock so concurrent requests are serialized.
-        On CLIConnectionError, reconnects once and retries.
+        On CLIConnectionError, recreates the worker and retries once.
         """
         lock = self._get_lock(session_id)
         log.warning("[%s] send_message: acquiring lock", session_id[:8])
@@ -128,14 +270,6 @@ class AgentClientManager:
                     await self._force_disconnect(session_id)
                     raise
 
-    @staticmethod
-    async def _wrap_as_prompt(content: str | list[dict]) -> AsyncIterator[dict]:
-        """Wrap content blocks into the async iterable format client.query() expects."""
-        yield {
-            "type": "user",
-            "message": {"role": "user", "content": content},
-        }
-
     async def _do_send(
         self,
         session_id: str,
@@ -143,30 +277,16 @@ class AgentClientManager:
         content: str | list[dict],
     ) -> AsyncIterator[Message]:
         """Send content to client and yield messages until ResultMessage."""
-        state = await self._get_or_create(session_id, workspace)
-        content_type = "str" if isinstance(content, str) else f"list[{len(content)} blocks]"
-        log.warning("[%s] _do_send: calling client.query() with %s", session_id[:8], content_type)
-
-        if isinstance(content, str):
-            await state.client.query(content)
-        else:
-            await state.client.query(self._wrap_as_prompt(content))
-
-        log.warning("[%s] _do_send: client.query() returned, reading from persistent iterator", session_id[:8])
+        worker = await self._get_or_create_worker(session_id, workspace)
         self._last_active[session_id] = time.monotonic()
 
-        # Read from the session's long-lived iterator until ResultMessage.
-        # This is equivalent to receive_response() but reuses the same
-        # iterator across turns instead of creating a new one each time.
         msg_count = 0
-        async for msg in state.messages:
+        async for msg in worker.send(content):
             msg_count += 1
-            log.warning("[%s] _do_send: msg #%d type=%s", session_id[:8], msg_count, type(msg).__name__)
+            log.warning("[%s] msg #%d type=%s", session_id[:8], msg_count, type(msg).__name__)
             yield msg
-            if isinstance(msg, ResultMessage):
-                break
 
-        log.warning("[%s] _do_send: turn complete after %d messages", session_id[:8], msg_count)
+        log.warning("[%s] turn complete after %d messages", session_id[:8], msg_count)
         self._last_active[session_id] = time.monotonic()
 
     async def disconnect(self, session_id: str) -> None:
@@ -174,11 +294,11 @@ class AgentClientManager:
         await self._force_disconnect(session_id)
 
     async def _force_disconnect(self, session_id: str) -> None:
-        state = self._sessions.pop(session_id, None)
+        worker = self._workers.pop(session_id, None)
         self._last_active.pop(session_id, None)
-        if state is not None:
+        if worker is not None:
             try:
-                await state.client.disconnect()
+                await worker.stop()
             except Exception:
                 log.debug("Error disconnecting session %s", session_id, exc_info=True)
 
@@ -205,11 +325,11 @@ class AgentClientManager:
 
     async def shutdown(self) -> None:
         """Disconnect all clients. Call on app shutdown."""
-        session_ids = list(self._sessions.keys())
+        session_ids = list(self._workers.keys())
         for sid in session_ids:
             await self._force_disconnect(sid)
         self._locks.clear()
-        log.warning("AgentClientManager shut down — %d clients cleaned up", len(session_ids))
+        log.warning("AgentClientManager shut down — %d workers cleaned up", len(session_ids))
 
 
 def get_client_manager() -> AgentClientManager:
