@@ -101,21 +101,14 @@ class _SessionWorker:
         output_q: asyncio.Queue,
     ) -> None:
         """Execute one turn: query + stream response back via output_q."""
-        content_desc = "str" if isinstance(content, str) else f"list[{len(content)} blocks]"
-        log.warning("[%s] worker: query(%s)", self._sid, content_desc)
-
         try:
             if isinstance(content, str):
                 await client.query(content)
             else:
                 await client.query(self._make_prompt(content))
 
-            log.warning("[%s] worker: reading response", self._sid)
-            msg_count = 0
             async for msg in client.receive_response():
-                msg_count += 1
                 await output_q.put(msg)
-            log.warning("[%s] worker: turn done (%d msgs)", self._sid, msg_count)
 
         except CLIConnectionError:
             # Propagate to caller, then re-raise to exit the worker loop.
@@ -254,9 +247,7 @@ class AgentClientManager:
         On CLIConnectionError, recreates the worker and retries once.
         """
         lock = self._get_lock(session_id)
-        log.warning("[%s] send_message: acquiring lock", session_id[:8])
         async with lock:
-            log.warning("[%s] send_message: lock acquired", session_id[:8])
             try:
                 async for msg in self._do_send(session_id, workspace, content):
                     yield msg
@@ -286,13 +277,8 @@ class AgentClientManager:
         worker = await self._get_or_create_worker(session_id, workspace)
         self._last_active[session_id] = time.monotonic()
 
-        msg_count = 0
         async for msg in worker.send(content):
-            msg_count += 1
-            log.warning("[%s] msg #%d type=%s", session_id[:8], msg_count, type(msg).__name__)
             yield msg
-
-        log.warning("[%s] turn complete after %d messages", session_id[:8], msg_count)
         self._last_active[session_id] = time.monotonic()
 
     async def disconnect(self, session_id: str) -> None:
