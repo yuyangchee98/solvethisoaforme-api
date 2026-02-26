@@ -118,6 +118,19 @@ async def stream_agent_response(
 
     try:
         async for message in client_manager.send_message(session_id, workspace, message_content):
+            # Synthetic events injected by hooks (not SDK Message objects)
+            if isinstance(message, dict) and message.get("_synthetic") == "compaction":
+                if text_started:
+                    yield {"type": "text-end", "id": text_part_id}
+                    text_started = False
+                    text_part_id = str(uuid.uuid4())
+                yield {
+                    "type": "compaction",
+                    "id": str(uuid.uuid4()),
+                    "trigger": message.get("trigger", "auto"),
+                }
+                continue
+
             parent_id = getattr(message, "parent_tool_use_id", None)
 
             # Handle UserMessage which contains tool results

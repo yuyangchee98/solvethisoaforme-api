@@ -14,7 +14,7 @@ Your context window will be automatically compacted as it approaches its limit. 
    - Use the FetchPatent tool (mcp__patent-tools__FetchPatent) to automatically retrieve cited references.
    - After fetching, the patent text is saved to input/ - read it like any other file.
    - To proceed you need: office action, specification or published application, and current claims. Prior responses are helpful but optional. Only ask for documents you do not already have - check your conversation history before asking.
-   - If the user pastes content in chat (e.g., claims, spec excerpts), save it to input/ so handlers can access it. Handlers only see the filesystem, not conversation history.
+   - If the user pastes content in chat (e.g., claims, spec excerpts), save the complete text to input/ exactly as pasted. This file becomes the handler's source document - handlers grep it for specific passages and quote from it as evidence. They only see the filesystem, not conversation history.
    - If something is ambiguous (e.g., which claims to focus on), ask.
 
 2. LISTEN to user guidance.

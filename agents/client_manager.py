@@ -10,12 +10,13 @@ HTTP request handlers communicate with the worker via asyncio Queues.
 """
 
 import asyncio
+import dataclasses
 import logging
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, HookMatcher
 from claude_agent_sdk._errors import CLIConnectionError
 from claude_agent_sdk.types import Message, ResultMessage
 
@@ -50,6 +51,8 @@ class _SessionWorker:
         self._task: asyncio.Task | None = None
         self._ready = asyncio.Event()
         self._connect_error: BaseException | None = None
+        # Set by _handle_turn so the PreCompact hook can inject events
+        self._current_out_q: asyncio.Queue | None = None
 
     async def start(self) -> None:
         """Start the worker Task and wait until the client is connected."""
@@ -62,8 +65,29 @@ class _SessionWorker:
     # Worker loop (runs in its own Task)
     # ------------------------------------------------------------------
 
+    def _inject_compaction_event(self, trigger: str) -> None:
+        """Put a synthetic compaction marker onto the current output queue."""
+        if self._current_out_q is not None:
+            self._current_out_q.put_nowait(
+                {"_synthetic": "compaction", "trigger": trigger}
+            )
+            log.warning("[%s] injected compaction event (trigger=%s)", self._sid, trigger)
+
+    def _with_hooks(self) -> ClaudeAgentOptions:
+        """Return options with a PreCompact hook registered."""
+        async def _on_precompact(hook_input, _tool_use_id, _ctx):
+            self._inject_compaction_event(hook_input.get("trigger", "auto"))
+            return {}
+
+        existing_hooks = self._options.hooks or {}
+        merged: dict = {**existing_hooks}
+        merged["PreCompact"] = [
+            HookMatcher(matcher=None, hooks=[_on_precompact]),
+        ]
+        return dataclasses.replace(self._options, hooks=merged)
+
     async def _run(self) -> None:
-        client = ClaudeSDKClient(options=self._options)
+        client = ClaudeSDKClient(options=self._with_hooks())
         try:
             await client.connect()
         except BaseException as e:
@@ -101,6 +125,7 @@ class _SessionWorker:
         output_q: asyncio.Queue,
     ) -> None:
         """Execute one turn: query + stream response back via output_q."""
+        self._current_out_q = output_q
         try:
             if isinstance(content, str):
                 await client.query(content)
@@ -119,6 +144,7 @@ class _SessionWorker:
             log.error("[%s] worker: turn error: %s", self._sid, e, exc_info=True)
             await output_q.put(e)
         finally:
+            self._current_out_q = None
             await output_q.put(_DONE)
 
     @staticmethod
@@ -133,8 +159,8 @@ class _SessionWorker:
     # Public interface (called from HTTP handler Tasks)
     # ------------------------------------------------------------------
 
-    async def send(self, content: str | list[dict]) -> AsyncIterator[Message]:
-        """Send content and yield response Messages.
+    async def send(self, content: str | list[dict]) -> AsyncIterator[Message | dict]:
+        """Send content and yield response Messages (or synthetic dicts from hooks).
 
         This can be called from any asyncio Task — it communicates with the
         worker via Queues so the actual SDK calls stay in the worker Task.
@@ -240,8 +266,8 @@ class AgentClientManager:
         session_id: str,
         workspace: Path,
         content: str | list[dict],
-    ) -> AsyncIterator[Message]:
-        """Send a message and yield response messages.
+    ) -> AsyncIterator[Message | dict]:
+        """Send a message and yield response messages (or synthetic hook dicts).
 
         Acquires a per-session lock so concurrent requests are serialized.
         On CLIConnectionError, recreates the worker and retries once.
@@ -272,7 +298,7 @@ class AgentClientManager:
         session_id: str,
         workspace: Path,
         content: str | list[dict],
-    ) -> AsyncIterator[Message]:
+    ) -> AsyncIterator[Message | dict]:
         """Send content to client and yield messages until ResultMessage."""
         worker = await self._get_or_create_worker(session_id, workspace)
         self._last_active[session_id] = time.monotonic()

@@ -321,6 +321,13 @@ async def send_message(
                 full_response += delta
                 pending_text += delta
 
+            # Track compaction markers for persistence
+            elif event_type == "compaction":
+                if pending_text:
+                    ordered_parts.append({"type": "text", "text": pending_text})
+                    pending_text = ""
+                ordered_parts.append({"type": "compaction", "trigger": event.get("trigger", "auto")})
+
             # Capture tool call input — flush pending text first
             elif event_type == "tool-input-available":
                 tool_call_id = event.get("toolCallId")

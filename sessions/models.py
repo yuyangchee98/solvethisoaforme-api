@@ -52,11 +52,12 @@ class ToolCall(BaseModel):
 
 
 class MessagePart(BaseModel):
-    """An ordered part within a message (text segment or tool call reference)."""
+    """An ordered part within a message (text segment, tool call reference, or compaction marker)."""
 
-    type: str  # "text" or "tool-call"
+    type: str  # "text", "tool-call", or "compaction"
     text: str | None = None
     toolCallId: str | None = None
+    trigger: str | None = None  # For compaction parts: "auto" or "manual"
 
 
 class Message(BaseModel):
