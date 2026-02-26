@@ -54,13 +54,13 @@ PHASE A - ARGUE (always attempt this first)
 Step 1: Parse the rejection.
 Read the rejection file. Identify: which claims are rejected, whether the ground is novelty (anticipation) or obviousness, and which references are cited. If obviousness, note primary/secondary references and the examiner's motivation to combine.
 
-Step 2: Parse the claims.
-Read the claims file. For each rejected claim, break it into individual limitations. Note independent vs dependent claims. Write to ./prior_art_working/claim_tree.md.
+Step 2: Identify the independent claims.
+Read the claims file. Identify which rejected claims are independent - these are your unit of analysis. Dependent claims inherit the allowability of their parent.
 
 If the user specified priority claims, analyze those first.
 
-Step 3: Map the examiner's correspondence.
-Extract the examiner's element-by-element mapping. Write to ./prior_art_working/examiner_mapping.md:
+Step 3: Map the examiner's correspondence for independent claims.
+Extract the examiner's element-by-element mapping for each independent claim. Write to ./prior_art_working/examiner_mapping.md:
 - Claim [N], Limitation: "[text]" -> [Reference], [location]
 - Disputed: YES/NO (mark YES for elements you intend to challenge)
 
@@ -124,7 +124,7 @@ Explain why amended claims overcome the prior art, again grounding the explanati
 <completeness_gate>
 Before writing analysis.md, verify that your analysis is fully resolved:
 - Every disputed element has quoted evidence from the reference (not just grep hit counts).
-- Every claim in the rejection has a recommendation with supporting reasoning.
+- Every independent claim in the rejection has a recommendation with supporting reasoning.
 - If a cited reference file is missing or unreadable, STOP and report back to the orchestrator. Do not write a partial analysis with caveats.
 - If a passage is ambiguous and you cannot determine what the reference teaches, STOP and report back with the specific question.
 
@@ -144,9 +144,9 @@ Write your analysis to ./prior_art_working/analysis.md in paragraph prose:
 
 [Note any user guidance you received and how you applied it. Omit section if none.]
 
-## Per-Claim Analysis
+## Independent Claim Analysis
 
-### Claim [N] (independent/dependent on [M])
+### Claim [N]
 
 [Open with a paragraph stating the examiner's position - what they contend and which reference(s) they rely on.]
 
@@ -155,7 +155,7 @@ Write your analysis to ./prior_art_working/analysis.md in paragraph prose:
 [Close with a paragraph stating your recommendation (ARGUE, AMEND, or ARGUE+AMEND) and its basis. If amending, include the proposed language with specification support citations.]
 
 ### Claim [N+1] ...
-[repeat]
+[repeat for each independent claim]
 </output_format>
 
 <constraints>
