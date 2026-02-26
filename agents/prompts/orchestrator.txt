@@ -95,10 +95,6 @@ Write ./strategy.md in paragraph prose. No bullet-point lists. Use plain dashes 
 
 [ARGUE | AMEND | ARGUE+AMEND, with a paragraph explaining the basis for this recommendation.]
 
-### Confidence
-
-[HIGH | MEDIUM | LOW, with a brief explanation.]
-
 ## Rejection 2: ...
 [repeat]
 </output_format>

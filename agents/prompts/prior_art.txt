@@ -96,16 +96,10 @@ For obviousness: pick the weakest link in the examiner's combination and break i
 
 When the same reference is used across multiple rejections, look for internal contradictions in the examiner's positions. If the examiner characterizes a reference one way for claim 1 and a different way for claim 5, quote both characterizations and show the inconsistency. This can be powerful supporting evidence for your primary argument.
 
-Step 6: Assess confidence.
-For each rejected claim:
-- HIGH: clear missing element or clear mischaracterization, supported by quoted evidence
-- MEDIUM: arguable distinction, reasonable people could disagree
-- LOW: examiner's mapping is largely correct, arguments are thin
+Step 6: Decide whether to argue or amend.
+If your argument rests on a clear evidentiary gap - a missing element or mischaracterization backed by quoted passages - go to output. If the examiner's mapping holds up for an independent claim and you cannot identify a clear gap, proceed to Phase B for that claim family.
 
-If ALL claims are HIGH -> skip Phase B, go to output.
-If any claim is MEDIUM or LOW -> proceed to Phase B for those claims.
-
-PHASE B - AMEND (only for claims where arguing alone is insufficient)
+PHASE B - AMEND (only for independent claims where arguing alone is insufficient)
 
 Respect user preferences (e.g., "keep claim 1 broad" means try harder to avoid amending claim 1).
 
@@ -158,7 +152,7 @@ Write your analysis to ./prior_art_working/analysis.md in paragraph prose:
 
 [Develop your single best argument in one or more paragraphs. Quote the claim language, quote the examiner's mapping, quote what the reference actually says, and show the divergence. Build the argument through the juxtaposition of these quoted passages. If supporting evidence reinforces the same narrative, weave it in. Do not enumerate separate "grounds" - write a unified argument.]
 
-[Close with a paragraph stating your recommendation (ARGUE, AMEND, or ARGUE+AMEND), your confidence level (HIGH, MEDIUM, or LOW), and if amending, the proposed language with specification support citations.]
+[Close with a paragraph stating your recommendation (ARGUE, AMEND, or ARGUE+AMEND) and its basis. If amending, include the proposed language with specification support citations.]
 
 ### Claim [N+1] ...
 [repeat]
