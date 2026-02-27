@@ -50,7 +50,7 @@ def build_message_content(
         data = file_info["data"]
 
         if media_type == "application/pdf":
-            # PDF: use native document block for visual understanding
+            # PDF: always send native document block for visual understanding
             content.append({
                 "type": "document",
                 "source": {
@@ -59,6 +59,17 @@ def build_message_content(
                     "data": data,
                 }
             })
+            # If text was extracted, also note the extracted file path
+            # so handler subagents can Read/Grep it
+            if "extracted_text" in file_info:
+                stem = Path(filename).stem
+                content.append({
+                    "type": "text",
+                    "text": (
+                        f"Text extracted from {filename} to input/{stem}.extracted.md. "
+                        f"Handler subagents should Read/Grep that file rather than re-extracting."
+                    ),
+                })
         elif media_type in IMAGE_MIME_TYPES:
             # Images: use native image block for vision
             content.append({
