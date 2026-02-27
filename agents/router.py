@@ -262,6 +262,7 @@ async def send_message(
             if result.extracted_text:
                 file_info["extracted_text"] = result.extracted_text
             if result.error:
+                file_info["processor_error"] = result.error
                 import logging
                 logging.getLogger(__name__).warning(
                     "Processor error for %s: %s", filename, result.error

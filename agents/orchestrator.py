@@ -70,6 +70,17 @@ def build_message_content(
                         f"Handler subagents should Read/Grep that file rather than re-extracting."
                     ),
                 })
+            elif "processor_error" in file_info:
+                content.append({
+                    "type": "text",
+                    "text": (
+                        f"[Note] Automatic text extraction to .extracted.md failed for {filename}: "
+                        f"{file_info['processor_error']} "
+                        f"You can still read this PDF visually above — it is NOT unreadable. "
+                        f"However, no .extracted.md file exists, so handler subagents cannot Grep it. "
+                        f"If you need handlers to search this document, extract the text yourself into a file first."
+                    ),
+                })
         elif media_type in IMAGE_MIME_TYPES:
             # Images: use native image block for vision
             content.append({
