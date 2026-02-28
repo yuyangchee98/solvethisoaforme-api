@@ -17,8 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from models import AnalyzeClaimsRequest, AnalyzeClaimsResponse
 from core.analyzer import ClaimAnalyzer, register_default_validators
 from sessions import init_db, close_db
-from agents import agents_router
-from agents.client_manager import get_client_manager
+from oa_response import oa_response_router
+from oa_response.client_manager import get_client_manager
 from auth.db import init_auth_db
 from auth.users import fastapi_users, auth_backend, current_active_user
 from auth.schemas import UserRead, UserCreate, UserUpdate
@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     await init_auth_db()
 
-    # Start background cleanup loop for idle agent clients
+    # Start background cleanup loop for idle OA response clients
     cleanup_task = asyncio.create_task(get_client_manager().run_cleanup_loop())
 
     yield
@@ -78,8 +78,8 @@ app.include_router(
 # Billing router
 app.include_router(billing_router)
 
-# Include agent router
-app.include_router(agents_router)
+# Include OA response router
+app.include_router(oa_response_router)
 
 # Initialize analyzer
 analyzer = ClaimAnalyzer()

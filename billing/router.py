@@ -52,7 +52,7 @@ async def create_checkout_session(
             mode="subscription",
             line_items=[{"price": price_id, "quantity": 1}],
             allow_promotion_codes=True,
-            success_url=f"{FRONTEND_URL}/agent?checkout=success",
+            success_url=f"{FRONTEND_URL}/oa-response?checkout=success",
             cancel_url=f"{FRONTEND_URL}/login?checkout=canceled",
             **customer_kwargs,
             metadata={
@@ -82,7 +82,7 @@ async def create_portal_session(user: User = Depends(current_active_user)):
     try:
         session = stripe.billing_portal.Session.create(
             customer=user.stripe_customer_id,
-            return_url=f"{FRONTEND_URL}/agent",
+            return_url=f"{FRONTEND_URL}/oa-response",
         )
     except stripe.StripeError as e:
         logger.error("Stripe portal error: %s", e)

@@ -1,4 +1,4 @@
-"""FastAPI router for agent session endpoints."""
+"""FastAPI router for OA response session endpoints."""
 
 import json
 import re
@@ -79,7 +79,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
 
-router = APIRouter(prefix="/agents", tags=["agents"])
+router = APIRouter(prefix="/oa-response", tags=["oa-response"])
 
 
 def _sanitize_filename(filename: str) -> str:
