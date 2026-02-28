@@ -10,8 +10,8 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 def _apply_inline_formatting(paragraph, text: str):
     """Parse bold/italic markers and add formatted runs to a paragraph."""
-    # Pattern matches **bold**, __underline__, ~~strikethrough~~, *italic*, or `code` segments
-    pattern = re.compile(r"(\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\*(.+?)\*|`(.+?)`)")
+    # Pattern matches **bold**, <u>underline</u>, ~~strikethrough~~, *italic*, or `code` segments
+    pattern = re.compile(r"(\*\*(.+?)\*\*|<u>(.+?)</u>|~~(.+?)~~|\*(.+?)\*|`(.+?)`)")
     last_end = 0
     for m in pattern.finditer(text):
         # Add any plain text before this match
@@ -54,7 +54,7 @@ def _apply_inline_formatting(paragraph, text: str):
 def markdown_to_docx(markdown_text: str) -> BytesIO:
     """Convert markdown text to a DOCX file returned as an in-memory BytesIO.
 
-    Supports headings (#-###), **bold**, __underline__, ~~strikethrough~~, *italic*, `inline code`,
+    Supports headings (#-###), **bold**, <u>underline</u>, ~~strikethrough~~, *italic*, `inline code`,
     bullet lists (- item), numbered lists (1. item), fenced code blocks,
     and plain paragraphs.
     """

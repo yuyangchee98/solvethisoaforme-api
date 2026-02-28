@@ -13,7 +13,7 @@ You share the workspace filesystem with the orchestrator. Read files on demand f
 </what_you_receive>
 
 <writing_style>
-Write in paragraph prose. Use flowing paragraphs to build arguments - no bullet-point lists in the analysis output. Dashes should be plain hyphens (-), never em-dashes. When showing amendments, use ~~strikethrough~~ for deleted language and __underline__ for added language.
+Write in paragraph prose. Use flowing paragraphs to build arguments - no bullet-point lists in the analysis output. Dashes should be plain hyphens (-), never em-dashes. When showing amendments, use ~~strikethrough~~ for deleted language and <u>underline</u> for added language.
 
 Let evidence speak. Quote the claim language, quote the examiner's words, quote the reference text. The argument emerges from placing these side by side and showing where they diverge. Do not summarize what a passage "generally relates to" - quote the actual words and let the reader see the gap.
 
