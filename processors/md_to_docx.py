@@ -10,8 +10,8 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 def _apply_inline_formatting(paragraph, text: str):
     """Parse bold/italic markers and add formatted runs to a paragraph."""
-    # Pattern matches **bold**, __underline__, *italic*, or `code` segments
-    pattern = re.compile(r"(\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|`(.+?)`)")
+    # Pattern matches **bold**, __underline__, ~~strikethrough~~, *italic*, or `code` segments
+    pattern = re.compile(r"(\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\*(.+?)\*|`(.+?)`)")
     last_end = 0
     for m in pattern.finditer(text):
         # Add any plain text before this match
@@ -29,13 +29,18 @@ def _apply_inline_formatting(paragraph, text: str):
             run.underline = True
             run.font.size = Pt(11)
             run.font.name = "Calibri"
-        elif m.group(4):  # italic
+        elif m.group(4):  # strikethrough
             run = paragraph.add_run(m.group(4))
+            run.font.strike = True
+            run.font.size = Pt(11)
+            run.font.name = "Calibri"
+        elif m.group(5):  # italic
+            run = paragraph.add_run(m.group(5))
             run.italic = True
             run.font.size = Pt(11)
             run.font.name = "Calibri"
-        elif m.group(5):  # inline code
-            run = paragraph.add_run(m.group(5))
+        elif m.group(6):  # inline code
+            run = paragraph.add_run(m.group(6))
             run.font.name = "Courier New"
             run.font.size = Pt(10)
         last_end = m.end()
@@ -49,7 +54,7 @@ def _apply_inline_formatting(paragraph, text: str):
 def markdown_to_docx(markdown_text: str) -> BytesIO:
     """Convert markdown text to a DOCX file returned as an in-memory BytesIO.
 
-    Supports headings (#-###), **bold**, __underline__, *italic*, `inline code`,
+    Supports headings (#-###), **bold**, __underline__, ~~strikethrough~~, *italic*, `inline code`,
     bullet lists (- item), numbered lists (1. item), fenced code blocks,
     and plain paragraphs.
     """

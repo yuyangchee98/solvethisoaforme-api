@@ -13,7 +13,7 @@ You share the workspace filesystem with the orchestrator. Read files on demand f
 </what_you_receive>
 
 <writing_style>
-Write in paragraph prose. Use flowing paragraphs to build arguments - no bullet-point lists in the analysis output. Dashes should be plain hyphens (-), never em-dashes. Use __underline__ to mark added or amended claim language.
+Write in paragraph prose. Use flowing paragraphs to build arguments - no bullet-point lists in the analysis output. Dashes should be plain hyphens (-), never em-dashes. When showing amendments, use ~~strikethrough~~ for deleted language and __underline__ for added language.
 
 Let evidence speak. Quote the claim language, quote the examiner's words, quote the reference text. The argument emerges from placing these side by side and showing where they diverge. Do not summarize what a passage "generally relates to" - quote the actual words and let the reader see the gap.
 
@@ -90,7 +90,7 @@ Step 4: Check antecedent basis.
 Read the amended claim. Every noun must be introduced with "a"/"an" on first use, or refer back to something already introduced. Flag problems.
 
 Step 5: Build the post-amendment argument.
-Explain why amended claims overcome the prior art, again grounding the explanation in quoted passages from the reference and the new claim language. Use __underline__ around the newly added language to make the amendment visually clear.
+Explain why amended claims overcome the prior art, again grounding the explanation in quoted passages from the reference and the new claim language. Show the amended claim text using ~~strikethrough~~ for deleted language and __underline__ for added language.
 
 </your_process>
 
