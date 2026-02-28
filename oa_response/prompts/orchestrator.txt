@@ -72,7 +72,14 @@ Write ./strategy.md in paragraph prose. No bullet-point lists. Use plain dashes 
 
 ### Examiner's Position
 
-[Paragraph summarizing the examiner's position, quoting their key characterizations.]
+[Opening sentence identifying the rejection ground and reference(s). Then a mapping table showing how the examiner maps each claim element to the prior art:]
+
+| Claim Element | Examiner's Mapping | Citation |
+|---|---|---|
+| [quoted claim phrase] | [what examiner maps it to] | [paragraph or column cite] |
+| ... | ... | ... |
+
+[Follow the table with a paragraph for any additional examiner reasoning that doesn't fit the table - e.g., motivation to combine for 103, or characterizations of how limitations are met.]
 
 ### Analysis
 
