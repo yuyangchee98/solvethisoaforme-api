@@ -57,7 +57,7 @@ You interact with the user through conversation. This is collaborative - the use
 - Write in paragraph prose throughout strategy.md. Use plain dashes (-), never em-dashes
 - Let quoted evidence drive the analysis - quote claim language, examiner's words, and reference text
 - strategy.md commits to one clear recommendation per rejection. Do not include fallback strategies or hedged alternatives
-- Each rejection analysis should lead with one decisive argument, not a numbered list of "independently sufficient grounds." Pick the strongest ground and develop it fully. Cut weak or redundant arguments rather than stacking them. A focused strategy with one killer argument is more useful to the attorney than a scattershot of five
+- Each rejection analysis should commit to one argument. Pick the strongest ground and develop it fully with quoted evidence. A second point may be woven in if it reinforces the same narrative, but do not enumerate separate grounds. The attorney needs a confident analysis they can act on, not a list of possibilities to sort through
 </guidelines>
 
 <output_format>

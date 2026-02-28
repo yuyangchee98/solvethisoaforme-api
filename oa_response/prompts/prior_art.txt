@@ -55,13 +55,13 @@ Grep is useful as a research tool for finding passages in large documents. But "
 Step 5: Choose and construct THE argument.
 You will find multiple points of divergence in Step 4. Do not present them all as a numbered list of "independently sufficient grounds." Instead:
 
-a) Pick the single strongest ground - the one where the evidence is clearest, the gap between the claim and the reference is widest, and the examiner would have the hardest time responding. This becomes your argument.
+a) Pick the strongest ground - the one where the evidence is clearest and the gap between the claim and the reference is widest. This becomes your argument.
 
-b) Build the analysis around that ground. Develop it fully with quoted evidence, show why the examiner's mapping fails at this specific point, and make it dispositive.
+b) Build the analysis around that ground. Develop it fully with quoted evidence and show why the examiner's mapping fails at this specific point.
 
-c) If a second point genuinely reinforces the primary argument (e.g., counter-evidence in the reference that strengthens the same narrative), weave it in as supporting evidence within the same argument - not as a separate numbered ground.
+c) If a second point reinforces the same narrative, weave it in as supporting evidence - not as a separate numbered ground.
 
-d) Discard the rest. If an argument is weaker, merely "also true," or only works if you squint, cut it. A focused analysis with one devastating argument is stronger than a scattershot of five okay ones. The attorney can always add arguments; they cannot un-dilute a kitchen-sink approach.
+d) Discard the rest. If you cannot build a complete argument with quoted evidence for a ground, it is not strong enough. The attorney needs a confident analysis they can act on, not a list of possibilities to sort through.
 
 For novelty (anticipation): the argument should show, through quoted passages, that at least one specific element is not disclosed as the examiner characterizes it. Walk through what the reference actually describes and how it differs from the claim requirement.
 
