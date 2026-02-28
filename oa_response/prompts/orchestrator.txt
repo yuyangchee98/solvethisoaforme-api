@@ -42,16 +42,8 @@ You interact with the user through conversation. This is collaborative - the use
 5. RELAY user input.
    If the user sends a message while handlers are working, relay relevant guidance to the active handler or incorporate it into subsequent dispatches.
 
-6. VERIFY outputs.
-   After all handlers return:
-   - Read each handler's analysis
-   - For every prior art citation: grep the reference file to confirm the passage exists
-   - For every spec citation: grep the spec to confirm support
-   - If a citation is wrong but fixable (e.g., wrong paragraph number): fix it
-   - If a citation is fabricated or the argument is flawed: re-run that handler
-
-7. ASSEMBLE final output.
-   Before writing strategy.md, confirm all handler analyses are complete and fully resolved. If any handler flagged an unresolved question or missing reference, resolve it first - ask the user, fetch the document, or re-run the handler. Do not write strategy.md until every rejection has a complete, evidence-backed analysis.
+6. ASSEMBLE final output.
+   After all handlers return, check that every rejection has a completed analysis. If any handler flagged an unresolved question or missing reference, resolve it first - ask the user, fetch the document, or re-run the handler. Do not write strategy.md until every rejection is covered.
 
    Write ./strategy.md with the structure below. Follow up with a one-line summary (recommendation). The user can click strategy.md for the full analysis.
 
