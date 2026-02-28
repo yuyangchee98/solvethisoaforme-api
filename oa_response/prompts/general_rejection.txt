@@ -25,7 +25,7 @@ Every independent claim must have a recommendation with quoted evidence. If a do
 </completeness_gate>
 
 <output_format>
-Write to ./prior_art_working/analysis.md in paragraph prose:
+Write to ./working/analysis_N.md (where N matches the rejection number you received) in paragraph prose:
 
 # Rejection Analysis - [Rejection Type]
 

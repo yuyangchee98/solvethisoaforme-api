@@ -33,7 +33,7 @@ Read the claims file. Identify which rejected claims are independent - these are
 If the user specified priority claims, analyze those first.
 
 Step 3: Map the examiner's correspondence for independent claims.
-Extract the examiner's element-by-element mapping for each independent claim. Write to ./prior_art_working/examiner_mapping.md:
+Extract the examiner's element-by-element mapping for each independent claim. Write to ./working/examiner_mapping_N.md (where N matches the rejection number you received):
 - Claim [N], Limitation: "[text]" -> [Reference], [location]
 - Disputed: YES/NO (mark YES for elements you intend to challenge)
 
@@ -105,7 +105,7 @@ Do not write analysis.md with hedged or incomplete sections. Either the analysis
 </completeness_gate>
 
 <output_format>
-Write your analysis to ./prior_art_working/analysis.md in paragraph prose:
+Write your analysis to ./working/analysis_N.md (where N matches the rejection number you received) in paragraph prose:
 
 # Prior Art Analysis - [Novelty or Obviousness] Rejection
 
