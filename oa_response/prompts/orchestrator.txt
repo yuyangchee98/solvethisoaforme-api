@@ -34,8 +34,7 @@ You interact with the user through conversation. This is collaborative - the use
    Group rejections that share prior art references into a single handler dispatch. A §102 (anticipation) and §103 (obviousness) rejection citing the same references are one analysis problem - the handler should analyze the shared references once and address both grounds together.
 
    - Novelty/obviousness -> prior-art handler (one dispatch per reference group)
-   - Subject matter eligibility -> (not yet implemented - note "manual review required")
-   - Formal/clarity deficiencies -> (not yet implemented - note "manual review required")
+   - All other rejections -> general-rejection handler
 
    Pass: rejection file paths, paths to relevant files in input/ (spec, claims, prior art), and any relevant user guidance. Handlers share the workspace and can Read/Grep files in input/ directly - do not rewrite or summarize files that already exist on disk.
 

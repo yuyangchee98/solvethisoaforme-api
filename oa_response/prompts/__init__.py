@@ -16,15 +16,21 @@ _SUBAGENT_DESCRIPTIONS: dict[str, str] = {
         "and prior art file paths. Returns per-claim analysis with "
         "argue/amend recommendation."
     ),
-    # Future: "eligibility", "clarity"
+    "general-rejection": (
+        "Analyzes non-prior-art rejections. Receives rejection text, claims, "
+        "and spec file paths. Returns per-claim analysis with argue/amend "
+        "recommendation."
+    ),
 }
 
 _SUBAGENT_TOOLS: dict[str, list[str]] = {
     "prior-art": ["Read", "Grep", "Glob", "Bash", "Write"],
+    "general-rejection": ["Read", "Grep", "Glob", "Bash", "Write"],
 }
 
 _SUBAGENT_MODELS: dict[str, str] = {
     "prior-art": "opus",
+    "general-rejection": "opus",
 }
 
 
