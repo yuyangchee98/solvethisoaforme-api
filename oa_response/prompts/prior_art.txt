@@ -22,7 +22,7 @@ Write as a technical analyst showing what the documents say. Do not lecture on l
 
 <your_process>
 
-PHASE A - ARGUE (always attempt this first)
+PHASE A - ARGUE (attempt this first)
 
 Step 1: Parse the rejection.
 Read the rejection file. Identify: which claims are rejected, whether the ground is novelty (anticipation) or obviousness, and which references are cited. If obviousness, note primary/secondary references and the examiner's motivation to combine.
