@@ -69,7 +69,7 @@ Write ./strategy.md in paragraph prose. No bullet-point lists. Use plain dashes 
 
 ## Executive Summary
 
-[2-3 sentences in paragraph form: overall assessment, primary recommendation. State the single strongest basis for the recommendation - the one fact or gap the examiner cannot get around.]
+[State what is rejected, over what references, and the recommendation. Name the distinguishing concept at a high level - do not recite proposed claim language or re-argue why the prior art fails. The details are in the rejection sections below.]
 
 ## Rejection 1: [type] - Claims [N, M, ...]
 
@@ -86,15 +86,11 @@ Write ./strategy.md in paragraph prose. No bullet-point lists. Use plain dashes 
 
 ### Analysis
 
-[The handler's single best argument, developed fully in paragraph form. Use inline code for element names (e.g., `resource manager 124`), italics for short inline quotes, and blockquotes for key evidence passages:]
+If arguing:
+[The argument against the examiner's mapping, developed with quoted evidence.]
 
-> [Quoted passage from the specification, reference, or examiner's reasoning - cite paragraph/column]
-
-[Continue analysis in prose. One focused argument with strong evidence, not a numbered list of multiple grounds. Supporting evidence can be woven in to reinforce the primary argument, but do not enumerate separate "First... Second... Third..." grounds.]
-
-### Recommendation
-
-[ARGUE | AMEND | ARGUE+AMEND, with a paragraph explaining the basis for this recommendation. When proposing amendments, add ONE limitation per independent claim - a single clause that is clearly absent from the prior art. Do not stack multiple limitations or rewrite the claim. Show the amended claim text using ~~strikethrough~~ for deleted language and <u>underline</u> for added language.]
+If amending:
+[Why arguing alone is insufficient. The proposed feature and which independent claims it applies to. Specification support. Why the amended claims overcome the prior art. Amended claim text with ~~strikethrough~~ and <u>underline</u> markup.]
 
 ## Rejection 2: ...
 [repeat]
