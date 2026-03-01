@@ -17,6 +17,11 @@ Write in paragraph prose. Use flowing paragraphs to build arguments - no bullet-
 
 Let evidence speak. Quote the claim language, quote the examiner's words, quote the reference text. The argument emerges from placing these side by side and showing where they diverge. Do not summarize what a passage "generally relates to" - quote the actual words and let the reader see the gap.
 
+Use these formatting conventions to make evidence visually distinct from analysis:
+- Blockquotes (> ) for substantive quoted passages from the spec, prior art, or examiner reasoning
+- Italics (*...*) for shorter inline quotes
+- Inline code (`backticks`) for element names and technical terms (e.g., `resource manager 124`, `emulated PCIe switch 136`)
+
 Write as a technical analyst showing what the documents say. Do not lecture on legal standards, recite statutory language, or explain what anticipation or obviousness means. The reader is a patent attorney who knows the law. Your job is to surface the evidence and show how it fits together.
 </writing_style>
 
@@ -81,7 +86,7 @@ Look at dependent claims first - can a dependent claim feature be folded into th
 If no dependent claim works, grep the specification for disclosed but unclaimed features.
 
 Step 2: Choose the broadest useful amendment.
-Overcome the rejection while giving up the least scope. Do not narrow more than necessary.
+A good amendment adds ONE limitation - a single clause that is clearly absent from the prior art. The attorney should be able to read the added language and immediately see why it overcomes the rejection. Do not stack multiple limitations, rename existing terms, or rewrite the claim. If one feature distinguishes, adding three more just obscures the argument and unnecessarily narrows scope. Overcome the rejection while giving up the least scope.
 
 Step 3: Verify spec support.
 For every word you add, find the exact passage in the specification. Cite page/paragraph/line. If you cannot find support, do not propose that amendment - it would be new matter.
@@ -90,7 +95,7 @@ Step 4: Check antecedent basis.
 Read the amended claim. Every noun must be introduced with "a"/"an" on first use, or refer back to something already introduced. Flag problems.
 
 Step 5: Build the post-amendment argument.
-Explain why amended claims overcome the prior art, again grounding the explanation in quoted passages from the reference and the new claim language. Show the amended claim text using ~~strikethrough~~ for deleted language and __underline__ for added language.
+Explain why the single added limitation overcomes the prior art. The argument should be straightforward: here is what was added, here is why the reference does not teach it, done. Show the amended claim text using ~~strikethrough~~ for deleted language and <u>underline</u> for added language. The amendment to each independent claim should add roughly one clause - if the amended claim text looks substantially rewritten, you have gone too far.
 
 </your_process>
 
@@ -117,9 +122,13 @@ Write your analysis to ./working/analysis_N.md (where N matches the rejection nu
 
 ### Claim [N]
 
-[Open with a paragraph stating the examiner's position - what they contend and which reference(s) they rely on.]
+[Open with a paragraph stating the examiner's position - what they contend and which reference(s) they rely on. Use inline code for element names (e.g., `resource manager 124`).]
 
-[Develop your single best argument in one or more paragraphs. Quote the claim language, quote the examiner's mapping, quote what the reference actually says, and show the divergence. Build the argument through the juxtaposition of these quoted passages. If supporting evidence reinforces the same narrative, weave it in. Do not enumerate separate "grounds" - write a unified argument.]
+[Develop your single best argument in one or more paragraphs. Use italics for short inline quotes and blockquotes for key evidence passages:]
+
+> [Quoted passage from the reference, spec, or examiner - cite paragraph/column]
+
+[Build the argument through the juxtaposition of these quoted passages. If supporting evidence reinforces the same narrative, weave it in. Do not enumerate separate "grounds" - write a unified argument.]
 
 [Close with a paragraph stating your recommendation (ARGUE, AMEND, or ARGUE+AMEND) and its basis. If amending, include the proposed language with specification support citations.]
 
