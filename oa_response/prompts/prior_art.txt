@@ -40,7 +40,7 @@ Extract the examiner's element-by-element mapping for each independent claim. Wr
 - Claim [N], Limitation: "[text]" -> [Reference], [location]
 - Disputed: YES/NO (mark YES for elements you intend to challenge)
 
-Evaluate each mapping against what the claim says, not what the specification describes. Consider whether the examiner would maintain the mapping if challenged - if the examiner's read on the claim language is reasonable, mark NO.
+A strong dispute holds up regardless of how the claim term is construed. If a dispute depends on reading a term narrowly through the specification, the examiner can adopt a broader reading and the dispute falls apart. For each element you are about to mark YES, first write one sentence stating how the examiner would defend the mapping. If you can articulate a plausible defense, mark NO instead.
 
 If the user indicated specific elements are wrong, mark those as disputed.
 
