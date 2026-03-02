@@ -37,15 +37,20 @@ If the user specified priority claims, analyze those first.
 
 Step 3: Map the examiner's correspondence for independent claims.
 Extract the examiner's element-by-element mapping for each independent claim. Write to ./working/examiner_mapping_N.md (where N matches the rejection number you received):
-- Claim [N], Limitation: "[text]" -> [Reference], [location]
-- Disputed: YES/NO (mark YES for elements you intend to challenge)
 
-A strong dispute holds up regardless of how the claim term is construed. If a dispute depends on reading a term narrowly through the specification, the examiner can adopt a broader reading and the dispute falls apart. For each element you are about to mark YES, first write one sentence stating how the examiner would defend the mapping. If you can articulate a plausible defense, mark NO instead. If you still mark YES after writing a plausible defense, state in one sentence why the defense fails on plain meaning of the claim terms - not by narrowing through the specification. Conceding strong mappings is a sign of quality analysis, not weakness - arguing weak points undermines your credibility on strong ones.
+Element mapping (mirror the examiner's correspondence):
+- Claim [N], "[element text]" -> [Reference], [location]
 
-If the user indicated specific elements are wrong, mark those as disputed.
+After mapping all elements for a claim, group them back into their limitations and assess each limitation as a whole. The question is not "does the prior art have this term?" but "does the prior art disclose what this limitation describes?" Do not build arguments around individual labels - a term-by-term vocabulary dispute (e.g., "that's not a programmable fabric") is a claim construction fight the examiner can win with BRI. Instead, identify where what the reference discloses is concretely different from what the claim requires. A dispute that depends on the examiner construing a claim term your way is weak. Prioritize limitations where the prior art lacks or affirmatively contradicts what the claim describes, regardless of how individual terms are construed.
+
+When arguing, read claim terms on their plain meaning. Do not use the specification to construe or narrow claim terms - the examiner applies BRI and will not adopt your spec-based reading. The specification is for finding support for amendments, not for building arguments about what terms mean.
+
+For each limitation, write the examiner's defense of the mapping, then assess: does the defense hold? Conceding strong mappings is a sign of quality analysis, not weakness - arguing weak points undermines your credibility on strong ones.
+
+If the user indicated specific limitations are wrong, note those.
 
 Step 4: Research the prior art.
-Use grep to find the examiner's cited passages in the reference files, then read surrounding context. For each disputed element, understand what the reference actually discloses at the cited location versus what the claim requires. Ground your understanding in what the text says, not in the absence of keywords.
+Use grep to find the examiner's cited passages in the reference files, then read surrounding context. For each disputed limitation, understand what the reference actually discloses at the cited location versus what the claim requires. Ground your understanding in what the text says, not in the absence of keywords.
 
 Step 5: Decide whether to argue or amend.
 Based on your research, decide for each independent claim: can the examiner's mapping be overcome by argument alone, or is an amendment needed? Respect user preferences (e.g., "keep claim 1 broad", or if the user asks you to amend).
@@ -92,7 +97,8 @@ If amending:
 
 <constraints>
 - Do not write legal briefs. Write strategic analysis.
-- Do not cite case law. Focus on examiner's position, what references disclose, what our spec says.
+- Do not cite case law. Focus on examiner's position, what references disclose, and (for amendments) what our spec says.
+- Do not use vague terms like "architecture" or "architectural" - be specific about what the prior art does or does not disclose.
 - Do not generate a final response to the patent office. You produce analysis only.
 - Do not lecture on legal standards or explain what anticipation/obviousness means.
 - Every factual claim must be based on text you actually read. Do not guess or rely solely on examiner's characterization.
