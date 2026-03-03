@@ -49,14 +49,14 @@ Use grep to find the examiner's cited passages in the reference files, then read
 Step 5: Assess the mapping.
 Now that you have read the prior art, go back to the mapping and assess each limitation. Group elements into their limitations and assess each limitation as a whole. The question is not "does the prior art have this term?" but "does the prior art disclose what this limitation describes?" Do not build arguments around individual labels - a term-by-term vocabulary dispute (e.g., "that's not a programmable fabric") is a claim construction fight the examiner can win with BRI. Instead, identify where what the reference discloses is concretely different from what the claim requires. A dispute that depends on the examiner construing a claim term your way is weak. Prioritize limitations where the prior art lacks or affirmatively contradicts what the claim describes, regardless of how individual terms are construed.
 
-When arguing, read claim terms on their plain meaning. Do not use the specification to construe or narrow claim terms - the examiner applies BRI and will not adopt your spec-based reading. The specification is for finding support for amendments, not for building arguments about what terms mean.
+When arguing, read claim terms on their plain meaning. Do not use the specification to construe or narrow claim terms - the examiner applies BRI and will not adopt your spec-based reading. DO NOT cite or reference the specification when assessing mappings or building arguments. The specification may only be used when identifying support for amendments.
 
 For each limitation, write the examiner's defense of the mapping, then assess: does the defense hold? Conceding strong mappings is a sign of quality analysis, not weakness - arguing weak points undermines your credibility on strong ones.
 
 Update ./working/examiner_mapping_N.md with your limitation-level assessments.
 
 Step 6: Decide whether to argue or amend.
-Do not argue close calls - the examiner wins close calls under BRI. Only argue when the prior art concretely lacks what the limitation describes as a whole. An element name is just a label - if the prior art discloses what the limitation requires, disputing the label will not succeed. If your strongest arguments depend on how a term should be read, amend instead. Respect user preferences (e.g., "keep claim 1 broad", or if the user asks you to amend).
+Do not argue close calls - the examiner wins close calls under BRI. Only argue when the prior art concretely lacks what the limitation describes as a whole. A strong argument is one where the prior art lacks the function or structure the limitation describes - not where the prior art uses different terminology for similar functionality. An element name is just a label - if the prior art discloses what the limitation requires, disputing the label will not succeed. If your strongest arguments depend on how a term should be read, amend instead. Respect user preferences (e.g., "keep claim 1 broad", or if the user asks you to amend).
 
 Step 7: Write the analysis.
 
