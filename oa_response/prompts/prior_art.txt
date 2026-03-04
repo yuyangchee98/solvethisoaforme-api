@@ -34,25 +34,23 @@ Read the claims file. Identify which rejected claims are independent - these are
 If the user specified priority claims, analyze those first.
 
 Step 3: Map the examiner's correspondence for independent claims.
-Extract the examiner's element-by-element mapping for each independent claim. Write to ./working/examiner_mapping_N.md (where N matches the rejection number you received).
-
-Record the mapping only - do not assess or judge the mapping at this stage:
+Extract the examiner's element-by-element mapping for each independent claim. Keep this as working notes - do not write a separate file:
 - Claim [N], "[element text]" -> [Reference], [location]
 
 If the user indicated specific limitations are wrong, note those.
 
 Step 4: Understand what the prior art discloses.
-Before assessing whether the prior art meets the claims, build an independent understanding of what the reference actually describes. Read the passages the examiner cited and their surrounding context. Then write a disclosure summary to ./working/disclosure_summary_N.md covering:
+Before assessing whether the prior art meets the claims, build an independent understanding of what the reference actually describes. Read the passages the examiner cited and their surrounding context. Understand:
 
 - What problem the reference addresses
 - What system, method, or apparatus the reference describes
 - How the key components work and interact
 - What the reference achieves and what its limitations are
 
-Write this summary in the reference's own language and terminology. Do not frame or organize the summary around the claim's terms - describe the reference as its authors would describe it. Do not include any "what the reference does not describe" sections or contrast the reference against the claims. The summary should read as if you have never seen the claims - a pure technical description of what the reference discloses. This summary is your grounding for the assessment that follows.
+Think about the reference in its own language and terminology. Do not frame your understanding around the claim's terms. Do not think about what the reference "does not describe" or contrast it against the claims. Understand the reference as if you have never seen the claims - a pure technical understanding of what the reference discloses. This understanding is your grounding for the assessment that follows.
 
 Step 5: Assess the mapping.
-Now compare what the reference actually discloses (your summary from Step 4) against what the claims require. Group the examiner's mapped elements into their limitations and assess each limitation as a whole.
+Now compare what the reference actually discloses (your understanding from Step 4) against what the claims require. Group the examiner's mapped elements into their limitations and assess each limitation as a whole.
 
 The question for each limitation is: does what the reference concretely does or describes cover what this limitation requires? Ground your assessment in the reference's actual disclosure - the system it builds, the behavior it produces, the problem it solves - not in whether the reference uses particular words or labels.
 
@@ -63,8 +61,6 @@ A strong distinction is one where the reference's system concretely cannot perfo
 When arguing, read claim terms on their plain meaning. Do not use the specification to construe or narrow claim terms - the examiner applies BRI and will not adopt your spec-based reading. DO NOT cite or reference the specification when assessing mappings or building arguments. The specification may only be used when identifying support for amendments.
 
 For each limitation, write the examiner's defense of the mapping, then assess: does the defense hold? If it does, concede the limitation. Conceding strong mappings is a sign of quality analysis, not weakness - arguing weak points undermines your credibility on strong ones. Most examiner mappings are reasonable; expect to concede more limitations than you dispute.
-
-Update ./working/examiner_mapping_N.md with your limitation-level assessments.
 
 Step 6: Decide whether to argue or amend.
 Choose the path the examiner is most likely to accept. An argument succeeds only when the prior art concretely lacks what the limitation describes as a whole - when there is a gap between what the reference does and what the claim requires that no reasonable reading of the claim can close. If the examiner can defend the mapping by reading claim terms broadly, the argument will fail. An amendment with clear spec support is harder for the examiner to reject. Do not argue close calls. Respect user preferences (e.g., "keep claim 1 broad", or if the user asks you to amend).
@@ -84,13 +80,21 @@ Every independent claim must have a recommendation with quoted evidence. If a ci
 </completeness_gate>
 
 <output_format>
-Write your analysis to ./working/analysis_N.md (where N matches the rejection number you received) in paragraph prose:
+Write your analysis to ./working/analysis_N.md (where N matches the rejection number you received) in paragraph prose. This is the only file you write - do not write separate mapping or summary files:
 
 # Prior Art Analysis - [Novelty or Obviousness] Rejection
 
 ## Rejection Summary
 
 [1-2 sentences: what was rejected, under what basis, citing what]
+
+## Prior Art Disclosure
+
+[What the reference discloses in its own terms: problem, system, how components work, what it achieves. Written as if you have never seen the claims. No "what it doesn't describe" sections.]
+
+## Examiner's Mapping
+
+[Element-by-element mapping with limitation-level assessments. For each limitation: examiner's mapping, examiner's defense, your assessment (concede or dispute with reason).]
 
 ## Independent Claim Analysis
 
