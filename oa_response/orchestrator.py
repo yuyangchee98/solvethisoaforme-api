@@ -254,7 +254,7 @@ async def stream_agent_response(
                                 "type": "tool-input-available",
                                 "toolCallId": block.id,
                                 "toolName": block.name,
-                                "input": block.input,
+                                "input": {**block.input, "_isSubagent": True},
                             }
 
             elif isinstance(message, ResultMessage):
