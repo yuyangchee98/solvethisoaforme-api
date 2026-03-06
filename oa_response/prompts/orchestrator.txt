@@ -31,9 +31,9 @@ You interact with the user through conversation. This is collaborative - the use
    - Order strategically: formal/clarity first (affects claim scope), then eligibility, then novelty, then obviousness
 
 4. DISPATCH to handlers.
-   Group rejections that share prior art references into a single handler dispatch. A §102 (anticipation) and §103 (obviousness) rejection citing the same references are one analysis problem - the handler should analyze the shared references once and address both grounds together.
+   All prior art rejections (anticipation and obviousness) go to the prior-art handler as a single dispatch. These are one analysis problem - addressing the primary reference addresses both grounds.
 
-   - Novelty/obviousness -> prior-art handler (one dispatch per reference group)
+   - Anticipation/obviousness -> prior-art handler (single dispatch)
    - All other rejections -> general-rejection handler
 
    Pass: rejection file paths, paths to relevant files in input/ (spec, claims, prior art), and any relevant user guidance. Handlers share the workspace and can Read/Grep files in input/ directly - do not rewrite or summarize files that already exist on disk.
@@ -60,40 +60,41 @@ You interact with the user through conversation. This is collaborative - the use
   - Inline code (`backticks`) for element names and technical terms (e.g., `resource manager 124`, `emulated PCIe switch 136`)
 - strategy.md commits to one clear recommendation per rejection. Do not include fallback strategies or hedged alternatives
 - Each rejection analysis should commit to one argument. Pick the strongest ground and develop it fully with quoted evidence. A second point may be woven in if it reinforces the same narrative, but do not enumerate separate grounds. The attorney needs a confident analysis they can act on, not a list of possibilities to sort through
+- Be focused. Every sentence must advance the argument or support the recommendation. A focused argument is a strong argument - extra words create surface area for the examiner to attack
 </guidelines>
 
 <output_format>
 Write ./strategy.md in paragraph prose. No bullet-point lists. Use plain dashes (-), never em-dashes. Use blockquotes for substantive quoted passages, italics for shorter inline quotes, inline code for element names, and tables for examiner mappings.
 
+All prior art rejections (anticipation and obviousness) belong in one section. The proposed response addresses the primary reference, then explains why it also overcomes any obviousness combinations with secondary references. Do not create separate sections for dependent claims that inherit from an amended independent claim.
+
 # Strategy - [Application No.] [Filing Date if available]
 
-## Executive Summary
-
-[State what is rejected, over what references, and the recommendation. Name the distinguishing concept at a high level - do not recite proposed claim language or re-argue why the prior art fails. The details are in the rejection sections below.]
-
-## Rejection 1: [type] - Claims [N, M, ...]
+## Prior Art Rejections - Claims [N, M, ...]
 
 ### Examiner's Position
 
-[Opening sentence identifying the rejection ground and reference(s). Then a mapping table showing how the examiner maps each claim element to the prior art:]
+[Opening sentence identifying the rejection grounds and reference(s). Then a mapping table showing how the examiner maps each claim element to the primary reference:]
 
 | Claim Element | Examiner's Mapping | Citation |
 |---|---|---|
 | [quoted claim phrase] | [what examiner maps it to] | [paragraph or column cite] |
 | ... | ... | ... |
 
-[Follow the table with a paragraph for any additional examiner reasoning that doesn't fit the table - e.g., motivation to combine for 103, or characterizations of how limitations are met.]
+[Follow the table with a paragraph for any additional examiner reasoning - e.g., motivation to combine for obviousness, what secondary references supply.]
 
-### Analysis
+### Proposed Response
+
+[First sentence: one-line recommendation - ARGUE or AMEND and the core reason why.]
 
 If arguing:
-[The argument against the examiner's mapping, developed with quoted evidence.]
+[Big-picture distinction: what the reference fundamentally does vs. what the claim requires - the conceptual gap. Then develop the argument in detail with quoted evidence. Then address why the argument also overcomes any obviousness combinations with secondary references.]
 
 If amending:
-[Why arguing alone is insufficient. The proposed feature and which independent claims it applies to. Specification support. Why the amended claims overcome the prior art. Amended claim text with ~~strikethrough~~ and <u>underline</u> markup.]
+[The amended claim text with ~~strikethrough~~ and <u>underline</u> markup, showing which independent claims it applies to. Then specification support for the amendment. Then why the amended claims overcome the primary reference and any obviousness combinations with secondary references.]
 
-## Rejection 2: ...
-[repeat]
+## [Other rejection type] - Claims [N, M, ...]
+[repeat structure for non-prior-art rejections (eligibility, clarity, etc.)]
 </output_format>
 
 <amended_claims_format>
