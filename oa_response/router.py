@@ -301,6 +301,10 @@ async def send_message(
     async def event_stream():
         """Generate SSE events from orchestrator output."""
         import uuid as uuid_mod
+        import logging as _logging
+        import traceback as _traceback
+        _stream_log = _logging.getLogger(__name__)
+
         message_id = str(uuid_mod.uuid4())
         full_response = ""
         tool_calls: dict[str, dict] = {}  # toolCallId -> data
@@ -311,46 +315,53 @@ async def send_message(
         # Start message event
         yield f"data: {json.dumps({'type': 'start', 'messageId': message_id})}\n\n"
 
-        message_content = build_message_content(agent_content, uploaded_files)
-        client_manager = get_client_manager()
-        async for event in stream_agent_response(client_manager, session_id, workspace, message_content):
-            event_type = event.get("type")
+        try:
+            message_content = build_message_content(agent_content, uploaded_files)
+            client_manager = get_client_manager()
+            async for event in stream_agent_response(client_manager, session_id, workspace, message_content):
+                event_type = event.get("type")
 
-            # Accumulate text for saving
-            if event_type == "text-delta":
-                delta = event.get("delta", "")
-                full_response += delta
-                pending_text += delta
+                # Accumulate text for saving
+                if event_type == "text-delta":
+                    delta = event.get("delta", "")
+                    full_response += delta
+                    pending_text += delta
 
-            # Track compaction markers for persistence
-            elif event_type == "compaction":
-                if pending_text:
-                    ordered_parts.append({"type": "text", "text": pending_text})
-                    pending_text = ""
-                ordered_parts.append({"type": "compaction", "trigger": event.get("trigger", "auto")})
-
-            # Capture tool call input — flush pending text first
-            elif event_type == "tool-input-available":
-                tool_call_id = event.get("toolCallId")
-                if tool_call_id:
+                # Track compaction markers for persistence
+                elif event_type == "compaction":
                     if pending_text:
                         ordered_parts.append({"type": "text", "text": pending_text})
                         pending_text = ""
-                    ordered_parts.append({"type": "tool-call", "toolCallId": tool_call_id})
-                    tool_calls[tool_call_id] = {
-                        "toolCallId": tool_call_id,
-                        "toolName": event.get("toolName"),
-                        "input": event.get("input"),
-                        "output": None,
-                    }
+                    ordered_parts.append({"type": "compaction", "trigger": event.get("trigger", "auto")})
 
-            # Capture tool call output
-            elif event_type == "tool-output-available":
-                tool_call_id = event.get("toolCallId")
-                if tool_call_id and tool_call_id in tool_calls:
-                    tool_calls[tool_call_id]["output"] = event.get("output")
+                # Capture tool call input — flush pending text first
+                elif event_type == "tool-input-available":
+                    tool_call_id = event.get("toolCallId")
+                    if tool_call_id:
+                        if pending_text:
+                            ordered_parts.append({"type": "text", "text": pending_text})
+                            pending_text = ""
+                        ordered_parts.append({"type": "tool-call", "toolCallId": tool_call_id})
+                        tool_calls[tool_call_id] = {
+                            "toolCallId": tool_call_id,
+                            "toolName": event.get("toolName"),
+                            "input": event.get("input"),
+                            "output": None,
+                        }
 
-            yield f"data: {json.dumps(event)}\n\n"
+                # Capture tool call output
+                elif event_type == "tool-output-available":
+                    tool_call_id = event.get("toolCallId")
+                    if tool_call_id and tool_call_id in tool_calls:
+                        tool_calls[tool_call_id]["output"] = event.get("output")
+
+                yield f"data: {json.dumps(event)}\n\n"
+
+        except Exception as e:
+            _stream_log.error(
+                "[%s] event_stream error:\n%s", session_id[:8], _traceback.format_exc()
+            )
+            yield f"data: {json.dumps({'type': 'error', 'errorText': f'Stream error: {e}'})}\n\n"
 
         # Flush any remaining text
         if pending_text:

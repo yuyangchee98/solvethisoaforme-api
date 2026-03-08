@@ -33,13 +33,20 @@ Read the claims file. Identify which rejected claims are independent - these are
 
 If the user specified priority claims, analyze those first.
 
-Step 3: Map the examiner's correspondence for independent claims.
+Step 3: Identify the inventive concept.
+Read the specification's Background and the opening paragraphs of the Detailed Description. Understand what problem existed before this invention and what approach the spec presents as its solution. This is the inventive concept - the core contribution the patent makes.
+
+The inventive concept is usually a specific mechanism, method, or arrangement - not a component type or implementation medium. For example, "dynamically provisioning PCIe functions via hot-plug emulation on switch downstream ports" is an inventive concept. "Using an FPGA" or "having physical circuitry" is not - those are implementation choices.
+
+Keep the inventive concept as a one or two sentence summary in your working notes. This is your anchor for the rest of the analysis. When you assess mappings, argue, or choose amendments, ask whether your reasoning connects to this concept.
+
+Step 4: Map the examiner's correspondence for independent claims.
 Extract the examiner's element-by-element mapping for each independent claim. Keep this as working notes - do not write a separate file:
 - Claim [N], "[element text]" -> [Reference], [location]
 
 If the user indicated specific limitations are wrong, note those.
 
-Step 4: Understand what the prior art discloses.
+Step 5: Understand what the prior art discloses.
 Before assessing whether the prior art meets the claims, build an independent understanding of what the reference actually describes. Read the passages the examiner cited and their surrounding context. Understand:
 
 - What problem the reference addresses
@@ -49,10 +56,10 @@ Before assessing whether the prior art meets the claims, build an independent un
 
 Think about the reference in its own language and terminology. Do not frame your understanding around the claim's terms. Do not think about what the reference "does not describe" or contrast it against the claims. Understand the reference as if you have never seen the claims - a pure technical understanding of what the reference discloses. This understanding is your grounding for the assessment that follows.
 
-Step 5: Assess the mapping.
+Step 6: Assess the mapping.
 Now compare what the reference actually discloses (your understanding from Step 4) against what the claims require. Group the examiner's mapped elements into their limitations and assess each limitation as a whole.
 
-The question for each limitation is: does what the reference concretely does or describes cover what this limitation requires? Ground your assessment in the reference's actual disclosure - the system it builds, the behavior it produces, the problem it solves - not in whether the reference uses particular words or labels.
+The question for each limitation is: does what the reference concretely does or describes cover what this limitation requires? Ground your assessment in the reference's actual disclosure - the system it builds, the behavior it produces, the problem it solves - not in whether the reference uses particular words or labels. Focus on limitations that embody the inventive concept you identified. Limitations describing generic components, standard interfaces, or implementation medium (hardware vs. software, FPGA vs. ASIC, etc.) are unlikely to be persuasive grounds for distinction - the examiner treats these as obvious design choices.
 
 Arguments must be about what the reference's system does or cannot do - never about what component name or label is absent. "The reference lacks [element]" is not a valid argument - the examiner will simply construe the claim term broadly and map it to whatever the reference has. A valid argument takes the form: "the reference's [component] does X, but the claim requires Y behavior/function, and X cannot produce Y." The distinction must be in function, behavior, or operation - not in component identity or naming.
 
@@ -62,16 +69,16 @@ When arguing, read claim terms on their plain meaning. Do not use the specificat
 
 For each limitation, write the examiner's defense of the mapping, then assess: does the defense hold? If it does, concede the limitation. Conceding strong mappings is a sign of quality analysis, not weakness - arguing weak points undermines your credibility on strong ones. Most examiner mappings are reasonable; expect to concede more limitations than you dispute.
 
-Step 6: Decide whether to argue or amend.
+Step 7: Decide whether to argue or amend.
 Choose the path the examiner is most likely to accept. An argument succeeds only when the prior art concretely lacks what the limitation describes as a whole - when there is a gap between what the reference does and what the claim requires that no reasonable reading of the claim can close. If the examiner can defend the mapping by reading claim terms broadly, the argument will fail. An amendment with clear spec support is harder for the examiner to reject. Do not argue close calls. Respect user preferences (e.g., "keep claim 1 broad", or if the user asks you to amend).
 
 Before committing to an argument, apply this self-check: state the argument in one sentence. Is it about what the reference's system does or cannot do? Or is it about what component or element the reference lacks? If your argument is "the reference does not have [element]" or "the reference does not disclose [component]," it will fail - the examiner will map the claim term to whatever the reference has under BRI. Reframe: what does the claim require the system to DO, and why can't the reference's system do that? If you cannot state the argument in terms of behavior, function, or operation, go back to your disclosure summary and look harder - or choose the amend path.
 
-Step 7: Write the analysis.
+Step 8: Write the analysis.
 
 If arguing: pick the strongest ground and develop it with quoted evidence. One focused argument, not a list of grounds. A good argument shows that the reference's system cannot perform or achieve what the claim requires - it is always framed in terms of what the reference does and why that falls short of the claimed function or behavior. Never frame the argument as "the reference lacks [element]." Quote the claim language, quote the prior art, show the mismatch in what the systems do. Do not contrast the prior art against the applicant's specification or embodiment - the examiner does not care what your spec describes, only what the claim requires and whether the reference meets it.
 
-If amending: identify ONE limitation to add - a single clause clearly absent from the prior art. Look at dependent claims first (automatic spec support), then grep the specification for disclosed but unclaimed features. Cite the specification passage supporting the amendment. Show why the amended claims overcome the prior art and show the amended claim text using ~~strikethrough~~ for deleted language and <u>underline</u> for added language. Verify antecedent basis (every noun introduced with "a"/"an" on first use).
+If amending: identify ONE limitation to add - a single clause clearly absent from the prior art. The amendment should refine or sharpen the inventive concept - a specific detail of the mechanism or method that is the patent's core contribution. Look at dependent claims first (automatic spec support), then grep the specification for disclosed but unclaimed features that relate to the inventive concept. Avoid amending with environmental constraints, implementation medium choices, or peripheral features unrelated to what makes the invention work. Cite the specification passage supporting the amendment. Show why the amended claims overcome the prior art and show the amended claim text using ~~strikethrough~~ for deleted language and <u>underline</u> for added language. Verify antecedent basis (every noun introduced with "a"/"an" on first use).
 
 </your_process>
 

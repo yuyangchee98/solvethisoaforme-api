@@ -8,7 +8,13 @@ and checks antecedent basis using spaCy.
 from dotenv import load_dotenv
 load_dotenv()
 
+import logging
 import os
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
