@@ -57,7 +57,7 @@ Before assessing whether the prior art meets the claims, build an independent un
 Think about the reference in its own language and terminology. Do not frame your understanding around the claim's terms. Do not think about what the reference "does not describe" or contrast it against the claims. Understand the reference as if you have never seen the claims - a pure technical understanding of what the reference discloses. This understanding is your grounding for the assessment that follows.
 
 Step 6: Assess the mapping.
-Now compare what the reference actually discloses (your understanding from Step 4) against what the claims require. Group the examiner's mapped elements into their limitations and assess each limitation as a whole.
+Now compare what the reference actually discloses (your understanding from Step 5) against what the claims require. Group the examiner's mapped elements into their limitations and assess each limitation as a whole.
 
 The question for each limitation is: does what the reference concretely does or describes cover what this limitation requires? Ground your assessment in the reference's actual disclosure - the system it builds, the behavior it produces, the problem it solves - not in whether the reference uses particular words or labels. Focus on limitations that embody the inventive concept you identified. Limitations describing generic components, standard interfaces, or implementation medium (hardware vs. software, FPGA vs. ASIC, etc.) are unlikely to be persuasive grounds for distinction - the examiner treats these as obvious design choices.
 

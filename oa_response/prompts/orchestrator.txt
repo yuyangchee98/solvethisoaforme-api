@@ -90,8 +90,23 @@ All prior art rejections (anticipation and obviousness) belong in one section. T
 If arguing:
 [Big-picture distinction: what the reference fundamentally does vs. what the claim requires - the conceptual gap. Then develop the argument in detail with quoted evidence. Then address why the argument also overcomes any obviousness combinations with secondary references.]
 
-If amending:
-[The amended claim text with ~~strikethrough~~ and <u>underline</u> markup, showing which independent claims it applies to. Then specification support for the amendment. Then why the amended claims overcome the primary reference and any obviousness combinations with secondary references.]
+If amending, use these subsections:
+
+#### Assessment
+
+[Why the current claims cannot be successfully argued as-is. What limitations are vulnerable under BRI, what arguments have already been tried and rejected, and why amendment is the stronger path.]
+
+#### Amendment
+
+[The amended claim text with ~~strikethrough~~ and <u>underline</u> markup, showing which independent claims it applies to.]
+
+#### Specification Support
+
+[The specification passages that support the amendment, with paragraph citations.]
+
+#### Argument
+
+[Why the amended claims overcome the primary reference and any obviousness combinations with secondary references. Ground the argument in the amended claim language - quote the claim terms, then show with quoted evidence from the prior art why the reference does not meet them.]
 
 ## [Other rejection type] - Claims [N, M, ...]
 [repeat structure for non-prior-art rejections (eligibility, clarity, etc.)]
