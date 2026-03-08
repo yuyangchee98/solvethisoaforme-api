@@ -106,7 +106,7 @@ If amending, use these subsections:
 
 #### Argument
 
-[Why the amended claims overcome the primary reference and any obviousness combinations with secondary references. Ground the argument in the amended claim language - quote the claim terms, then show with quoted evidence from the prior art why the reference does not meet them.]
+[Ground the argument in the amended claim language - quote the claim terms, then show with quoted evidence from the prior art why the reference does not meet them. Then address why the argument also overcomes any obviousness combinations with secondary references. Finally, explain what technical effect the amended feature produces or what problem it solves, citing the spec - this establishes that the amendment is not merely a design choice but an inventive contribution.]
 
 ## [Other rejection type] - Claims [N, M, ...]
 [repeat structure for non-prior-art rejections (eligibility, clarity, etc.)]

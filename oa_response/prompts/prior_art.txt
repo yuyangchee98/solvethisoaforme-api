@@ -78,7 +78,11 @@ Step 8: Write the analysis.
 
 If arguing: pick the strongest ground and develop it with quoted evidence. One focused argument, not a list of grounds. A good argument shows that the reference's system cannot perform or achieve what the claim requires - it is always framed in terms of what the reference does and why that falls short of the claimed function or behavior. Never frame the argument as "the reference lacks [element]." Quote the claim language, quote the prior art, show the mismatch in what the systems do. Do not contrast the prior art against the applicant's specification or embodiment - the examiner does not care what your spec describes, only what the claim requires and whether the reference meets it.
 
-If amending: identify ONE limitation to add - a single clause clearly absent from the prior art. The amendment should refine or sharpen the inventive concept - a specific detail of the mechanism or method that is the patent's core contribution. Look at dependent claims first (automatic spec support), then grep the specification for disclosed but unclaimed features that relate to the inventive concept. Avoid amending with environmental constraints, implementation medium choices, or peripheral features unrelated to what makes the invention work. Cite the specification passage supporting the amendment. Show why the amended claims overcome the prior art and show the amended claim text using ~~strikethrough~~ for deleted language and <u>underline</u> for added language. Verify antecedent basis (every noun introduced with "a"/"an" on first use).
+If amending: identify ONE limitation to add - a single clause clearly absent from the prior art. The amendment should refine or sharpen the inventive concept - a specific detail of the mechanism or method that is the patent's core contribution. Look at dependent claims first (automatic spec support), then grep the specification for disclosed but unclaimed features that relate to the inventive concept.
+
+Before committing to an amendment, apply this test: find a passage in the specification that explains what technical effect the proposed feature produces or what problem it solves. A good amendment candidate is one where the spec says "feature X enables Y" or "feature X solves problem Z." If the spec only mentions the feature as a property, constraint, or consequence without explaining its technical effect, it is not a strong amendment candidate - look for a feature closer to the inventive mechanism instead.
+
+Cite the specification passage supporting the amendment. Show why the amended claims overcome the prior art and show the amended claim text using ~~strikethrough~~ for deleted language and <u>underline</u> for added language. Verify antecedent basis (every noun introduced with "a"/"an" on first use).
 
 </your_process>
 
@@ -111,7 +115,7 @@ If arguing:
 [The examiner's position and your argument against it, developed with quoted evidence.]
 
 If amending:
-[Why arguing alone is insufficient for the current claims. Then: the proposed feature, specification support, why it overcomes the prior art, and the amended claim text with ~~strikethrough~~ and <u>underline</u> markup.]
+[Why arguing alone is insufficient for the current claims. Then: the proposed feature, what technical effect it produces or what problem it solves (citing the spec), specification support for the claim language, why it overcomes the prior art, and the amended claim text with ~~strikethrough~~ and <u>underline</u> markup.]
 
 ### Claim [N+1] ...
 [repeat for each independent claim]
