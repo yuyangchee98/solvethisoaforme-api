@@ -100,11 +100,16 @@ If amending:
 <amended_claims_format>
 After writing strategy.md, write ./amended_claims.md containing the complete claim set. Read the pending claims from input/ (e.g., claims.extracted.md) and reproduce every claim. For claims that are amended per the strategy, show the full amended text using ~~strikethrough~~ for deleted language and <u>underline</u> for added language. For claims that are not amended, copy them through as-is. Use the same status labels as patent practice (e.g., "Currently amended", "Original", "Previously presented", "Canceled").
 
+Indent claim elements using &emsp; entities to reflect the hierarchical structure of each claim. The preamble line (claim number + status + "A method comprising:") has no indent. Body elements get one &emsp;, sub-elements get two &emsp;, and so on for deeper nesting. Example:
+
 # Amended Claims - [Application No.]
 
-1. (Currently amended) [full claim text with ~~strikethrough~~ and <u>underline</u> markup]
+1. (Currently amended) A system comprising:
+&emsp;a widget that comprises a component comprising:
+&emsp;&emsp;a plurality of elements; and
+&emsp;&emsp;circuitry having ~~old language~~ <u>new language</u>.
 
-2. (Original) [claim text unchanged]
+2. (Original) The system of claim 1, wherein [dependent claim text unchanged].
 
 ...
 </amended_claims_format>

@@ -22,6 +22,7 @@ from claude_agent_sdk.types import Message, ResultMessage
 
 from .prompts import get_orchestrator_prompt, get_agent_definitions
 from .tools import create_patent_tools_server
+from .workspace_hooks import create_workspace_guard
 
 log = logging.getLogger(__name__)
 
@@ -40,10 +41,11 @@ class _SessionWorker:
     HTTP handlers interact via asyncio Queues.
     """
 
-    def __init__(self, session_id: str, options: ClaudeAgentOptions) -> None:
+    def __init__(self, session_id: str, options: ClaudeAgentOptions, workspace: Path) -> None:
         self._session_id = session_id
         self._sid = session_id[:8]
         self._options = options
+        self._workspace = workspace
         # Input: (content, output_queue) pairs, or None to shutdown
         self._input: asyncio.Queue[tuple[str | list[dict], asyncio.Queue] | None] = (
             asyncio.Queue()
@@ -74,15 +76,20 @@ class _SessionWorker:
             log.warning("[%s] injected compaction event (trigger=%s)", self._sid, trigger)
 
     def _with_hooks(self) -> ClaudeAgentOptions:
-        """Return options with a PreCompact hook registered."""
+        """Return options with PreCompact and PreToolUse hooks registered."""
         async def _on_precompact(hook_input, _tool_use_id, _ctx):
             self._inject_compaction_event(hook_input.get("trigger", "auto"))
             return {}
+
+        guard = create_workspace_guard(self._workspace)
 
         existing_hooks = self._options.hooks or {}
         merged: dict = {**existing_hooks}
         merged["PreCompact"] = [
             HookMatcher(matcher=None, hooks=[_on_precompact]),
+        ]
+        merged["PreToolUse"] = [
+            HookMatcher(matcher="Read|Write|Edit|Glob|Grep", hooks=[guard]),
         ]
         return dataclasses.replace(self._options, hooks=merged)
 
@@ -226,7 +233,7 @@ class AgentClientManager:
             log.error("CLI stderr: %s", line.rstrip())
 
         return ClaudeAgentOptions(
-            system_prompt=get_orchestrator_prompt(),
+            system_prompt=get_orchestrator_prompt(workspace),
             cwd=str(workspace),
             allowed_tools=[
                 "Read", "Write", "Grep", "Glob", "Bash", "Task",
@@ -235,7 +242,7 @@ class AgentClientManager:
             permission_mode="acceptEdits",
             max_turns=50,
             include_partial_messages=True,
-            agents=get_agent_definitions(),
+            agents=get_agent_definitions(workspace),
             mcp_servers={"patent-tools": patent_server},
             stderr=_on_stderr,
             max_buffer_size=50 * 1024 * 1024,
@@ -254,7 +261,7 @@ class AgentClientManager:
             self._workers.pop(session_id, None)
 
         options = self._build_options(workspace)
-        worker = _SessionWorker(session_id, options)
+        worker = _SessionWorker(session_id, options, workspace)
         await worker.start()
         self._workers[session_id] = worker
         self._last_active[session_id] = time.monotonic()

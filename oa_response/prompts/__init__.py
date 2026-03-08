@@ -46,29 +46,50 @@ def _load_prompt(name: str) -> str:
     return (_PROMPTS_DIR / f"{name}.txt").read_text()
 
 
-def get_orchestrator_prompt() -> str:
+def _workspace_preamble(workspace: Path) -> str:
+    """Generate a workspace context block for the agent prompt."""
+    return (
+        "<workspace>\n"
+        "Your current working directory is your workspace root.\n"
+        "Use relative paths for all file operations: "
+        "./input/, ./rejections/, ./prior_art_working/, ./strategy.md, etc.\n"
+        "</workspace>\n\n"
+    )
+
+
+def get_orchestrator_prompt(workspace: Path | None = None) -> str:
     """Get the orchestrator system prompt.
+
+    Args:
+        workspace: If provided, prepend workspace path context.
 
     Returns:
         The orchestrator system prompt
     """
-    return _load_prompt("orchestrator")
+    prompt = _load_prompt("orchestrator")
+    if workspace is not None:
+        prompt = _workspace_preamble(workspace) + prompt
+    return prompt
 
 
-def get_agent_definitions() -> dict[str, AgentDefinition]:
+def get_agent_definitions(workspace: Path | None = None) -> dict[str, AgentDefinition]:
     """Get all subagent definitions for the orchestrator.
+
+    Args:
+        workspace: If provided, prepend workspace path context to each agent prompt.
 
     Returns:
         Dict mapping agent names to their AgentDefinition objects.
         Agent names use kebab-case (e.g., "prior-art").
     """
+    preamble = _workspace_preamble(workspace) if workspace is not None else ""
     agents = {}
     for name, description in _SUBAGENT_DESCRIPTIONS.items():
         # Convert kebab-case to snake_case for file names
         file_name = name.replace("-", "_")
         agents[name] = AgentDefinition(
             description=description,
-            prompt=_load_prompt(file_name),
+            prompt=preamble + _load_prompt(file_name),
             tools=_SUBAGENT_TOOLS.get(name),
             model=_SUBAGENT_MODELS.get(name),
         )

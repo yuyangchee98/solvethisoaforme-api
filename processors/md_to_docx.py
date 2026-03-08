@@ -4,7 +4,7 @@ import re
 from io import BytesIO
 
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 
@@ -51,12 +51,21 @@ def _apply_inline_formatting(paragraph, text: str):
         run.font.name = "Calibri"
 
 
+def _strip_emsp_indent(text: str) -> tuple[str, int]:
+    """Count and strip leading &emsp; entities, returning (stripped_text, indent_level)."""
+    level = 0
+    while text.startswith("&emsp;"):
+        text = text[6:]  # len("&emsp;") == 6
+        level += 1
+    return text, level
+
+
 def markdown_to_docx(markdown_text: str) -> BytesIO:
     """Convert markdown text to a DOCX file returned as an in-memory BytesIO.
 
     Supports headings (#-###), **bold**, <u>underline</u>, ~~strikethrough~~, *italic*, `inline code`,
     bullet lists (- item), numbered lists (1. item), fenced code blocks,
-    and plain paragraphs.
+    &emsp; indentation, and plain paragraphs.
     """
     doc = Document()
 
@@ -101,6 +110,9 @@ def markdown_to_docx(markdown_text: str) -> BytesIO:
             i += 1
             continue
 
+        # Strip &emsp; indentation before matching patterns
+        stripped, indent_level = _strip_emsp_indent(stripped)
+
         # Headings
         heading_match = re.match(r"^(#{1,3})\s+(.*)", stripped)
         if heading_match:
@@ -131,6 +143,8 @@ def markdown_to_docx(markdown_text: str) -> BytesIO:
 
         # Regular paragraph
         p = doc.add_paragraph()
+        if indent_level > 0:
+            p.paragraph_format.left_indent = Inches(0.5 * indent_level)
         _apply_inline_formatting(p, stripped)
         i += 1
 
