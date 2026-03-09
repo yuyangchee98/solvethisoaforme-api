@@ -6,10 +6,18 @@ from io import BytesIO
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+
+
+def _strip_backslash_escapes(text: str) -> str:
+    r"""Remove backslash escapes like `1\.` → `1.` for markdown punctuation."""
+    return re.sub(r"\\([\\`*_{}[\]()#+\-.!|>~])", r"\1", text)
 
 
 def _apply_inline_formatting(paragraph, text: str):
     """Parse bold/italic markers and add formatted runs to a paragraph."""
+    text = _strip_backslash_escapes(text)
     # Pattern matches **bold**, <u>underline</u>, ~~strikethrough~~, *italic*, or `code` segments
     pattern = re.compile(r"(\*\*(.+?)\*\*|<u>(.+?)</u>|~~(.+?)~~|\*(.+?)\*|`(.+?)`)")
     last_end = 0
@@ -113,13 +121,105 @@ def markdown_to_docx(markdown_text: str) -> BytesIO:
         # Strip &emsp; indentation before matching patterns
         stripped, indent_level = _strip_emsp_indent(stripped)
 
-        # Headings
-        heading_match = re.match(r"^(#{1,3})\s+(.*)", stripped)
+        # Horizontal rule
+        if re.match(r"^([*_-])\1{2,}\s*$", stripped):
+            p = doc.add_paragraph()
+            # Thin gray bottom border to simulate an HR
+            pPr = p._element.get_or_add_pPr()
+            pBdr = OxmlElement("w:pBdr")
+            bottom = OxmlElement("w:bottom")
+            bottom.set(qn("w:val"), "single")
+            bottom.set(qn("w:sz"), "4")
+            bottom.set(qn("w:space"), "1")
+            bottom.set(qn("w:color"), "999999")
+            pBdr.append(bottom)
+            pPr.append(pBdr)
+            i += 1
+            continue
+
+        # Table (look-ahead: collect consecutive | lines)
+        if stripped.startswith("|"):
+            table_lines = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                table_lines.append(lines[i].strip())
+                i += 1
+            # Separate header, separator, and data rows
+            if len(table_lines) >= 2 and re.match(r"^\|[\s:_-]+\|", table_lines[1]):
+                header_cells = [c.strip() for c in table_lines[0].strip("|").split("|")]
+                data_rows = []
+                for tl in table_lines[2:]:
+                    data_rows.append([c.strip() for c in tl.strip("|").split("|")])
+                num_cols = len(header_cells)
+                table = doc.add_table(rows=1 + len(data_rows), cols=num_cols, style="Table Grid")
+                # Header row
+                for ci, cell_text in enumerate(header_cells):
+                    cell = table.rows[0].cells[ci]
+                    cell.text = ""
+                    p = cell.paragraphs[0]
+                    _apply_inline_formatting(p, cell_text)
+                    for run in p.runs:
+                        run.bold = True
+                        run.font.name = "Calibri"
+                        run.font.size = Pt(10)
+                    # Light gray shading
+                    shading = OxmlElement("w:shd")
+                    shading.set(qn("w:fill"), "D9D9D9")
+                    shading.set(qn("w:val"), "clear")
+                    cell._element.get_or_add_tcPr().append(shading)
+                # Data rows
+                for ri, row_cells in enumerate(data_rows):
+                    for ci in range(min(len(row_cells), num_cols)):
+                        cell = table.rows[ri + 1].cells[ci]
+                        cell.text = ""
+                        p = cell.paragraphs[0]
+                        _apply_inline_formatting(p, row_cells[ci])
+                        for run in p.runs:
+                            run.font.name = "Calibri"
+                            run.font.size = Pt(10)
+            else:
+                # Not a real table, treat lines as paragraphs
+                for tl in table_lines:
+                    p = doc.add_paragraph()
+                    _apply_inline_formatting(p, tl)
+            continue
+
+        # Blockquote (look-ahead: collect consecutive > lines)
+        if stripped.startswith(">"):
+            bq_parts = []
+            while i < len(lines) and lines[i].strip().startswith(">"):
+                bq_line = re.sub(r"^>\s?", "", lines[i].strip())
+                bq_parts.append(bq_line)
+                i += 1
+            bq_text = " ".join(bq_parts)
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Inches(0.5)
+            _apply_inline_formatting(p, bq_text)
+            for run in p.runs:
+                run.italic = True
+            continue
+
+        # Headings — custom styled paragraphs (not Word heading styles)
+        heading_match = re.match(r"^(#{1,6})\s+(.*)", stripped)
         if heading_match:
             level = len(heading_match.group(1))
             text = heading_match.group(2)
-            heading = doc.add_heading(level=level)
-            _apply_inline_formatting(heading, text)
+            p = doc.add_paragraph()
+            _apply_inline_formatting(p, text)
+            for run in p.runs:
+                run.font.color.rgb = None  # black
+                if level == 1:
+                    run.font.size = Pt(14)
+                    run.bold = True
+                elif level == 2:
+                    run.font.size = Pt(12)
+                    run.bold = True
+                elif level == 3:
+                    run.font.size = Pt(12)
+                    run.bold = True
+                    run.underline = True
+                else:  # 4-6
+                    run.font.size = Pt(12)
+                    run.underline = True
             i += 1
             continue
 

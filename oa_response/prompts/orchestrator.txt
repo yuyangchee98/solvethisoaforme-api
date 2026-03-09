@@ -98,7 +98,7 @@ If amending, use these subsections:
 
 #### Amendment
 
-[The amended claim text with ~~strikethrough~~ and <u>underline</u> markup, showing which independent claims it applies to.]
+[The amended claim text with ~~strikethrough~~ and <u>underline</u> markup, showing which independent claims it applies to. Indent claim elements using &emsp; entities to reflect hierarchical structure - no indent for the preamble line, one &emsp; for body elements, two &emsp; for sub-elements, etc.]
 
 #### Specification Support
 
