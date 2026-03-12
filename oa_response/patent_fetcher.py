@@ -59,7 +59,7 @@ def normalize_publication_number(raw: str) -> list[str]:
         return [f"{base}{kind}"]
 
     # No kind code provided — try common variants
-    return [f"{base}A1", f"{base}B1", f"{base}B2"]
+    return [f"{base}A1", f"{base}B1", f"{base}B2", f"{base}A"]
 
 
 async def fetch_patent(publication_number: str, workspace: Path) -> PatentFetchResult:

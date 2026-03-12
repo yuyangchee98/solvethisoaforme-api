@@ -1,9 +1,12 @@
 """FastAPI router for OA response session endpoints."""
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Literal
+
+log = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -186,6 +189,11 @@ async def send_message(
     """
     manager = get_session_manager()
 
+    last_msg = request.messages[-1] if request.messages else None
+    file_count = len(last_msg.get_file_parts()) if last_msg else 0
+    content_len = len(last_msg.get_text()) if last_msg else 0
+    log.info("[%s] send_message content_len=%d file_count=%d", session_id[:8], content_len, file_count)
+
     # Verify session exists and belongs to user
     session = await manager.get_session(session_id, user_id=str(user.id))
     if session is None:
@@ -263,10 +271,7 @@ async def send_message(
                 file_info["extracted_text"] = result.extracted_text
             if result.error:
                 file_info["processor_error"] = result.error
-                import logging
-                logging.getLogger(__name__).warning(
-                    "Processor error for %s: %s", filename, result.error
-                )
+                log.warning("Processor error for %s: %s", filename, result.error)
 
         uploaded_files.append(file_info)
 
@@ -301,11 +306,12 @@ async def send_message(
     async def event_stream():
         """Generate SSE events from orchestrator output."""
         import uuid as uuid_mod
-        import logging as _logging
         import traceback as _traceback
-        _stream_log = _logging.getLogger(__name__)
 
         message_id = str(uuid_mod.uuid4())
+        sid = session_id[:8]
+        log.info("[%s] stream start message_id=%s", sid, message_id)
+
         full_response = ""
         tool_calls: dict[str, dict] = {}  # toolCallId -> data
         # Track ordered parts: text segments interleaved with tool call refs
@@ -358,8 +364,8 @@ async def send_message(
                 yield f"data: {json.dumps(event)}\n\n"
 
         except Exception as e:
-            _stream_log.error(
-                "[%s] event_stream error:\n%s", session_id[:8], _traceback.format_exc()
+            log.error(
+                "[%s] event_stream error:\n%s", sid, _traceback.format_exc()
             )
             yield f"data: {json.dumps({'type': 'error', 'errorText': f'Stream error: {e}'})}\n\n"
 
@@ -367,18 +373,30 @@ async def send_message(
         if pending_text:
             ordered_parts.append({"type": "text", "text": pending_text})
 
+        # Stream completion metrics
+        log.info(
+            "[%s] stream complete message_id=%s response_len=%d tool_calls=%d parts=%d",
+            sid, message_id, len(full_response), len(tool_calls), len(ordered_parts),
+        )
+
         # Signal end of stream
         yield "data: [DONE]\n\n"
 
         # Save assistant response after streaming completes
         if full_response or tool_calls:
-            await manager.save_message(
-                session_id,
-                MessageRole.ASSISTANT,
-                full_response,
-                tool_calls=list(tool_calls.values()) if tool_calls else None,
-                parts=ordered_parts if ordered_parts else None,
-            )
+            try:
+                await manager.save_message(
+                    session_id,
+                    MessageRole.ASSISTANT,
+                    full_response,
+                    tool_calls=list(tool_calls.values()) if tool_calls else None,
+                    parts=ordered_parts if ordered_parts else None,
+                )
+                log.info("[%s] message saved message_id=%s", sid, message_id)
+            except Exception:
+                log.error("[%s] failed to save message message_id=%s", sid, message_id, exc_info=True)
+        else:
+            log.warning("[%s] stream produced no content to save message_id=%s", sid, message_id)
 
     return StreamingResponse(
         event_stream(),

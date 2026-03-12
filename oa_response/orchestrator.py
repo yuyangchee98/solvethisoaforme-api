@@ -2,6 +2,8 @@
 
 import base64
 import json
+import logging
+import time
 import uuid
 from pathlib import Path
 from typing import AsyncIterator, Any
@@ -16,6 +18,8 @@ from claude_agent_sdk import (
 from claude_agent_sdk.types import StreamEvent
 
 from .client_manager import AgentClientManager
+
+log = logging.getLogger(__name__)
 
 
 # Supported image MIME types for Claude vision
@@ -122,9 +126,8 @@ async def stream_agent_response(
     events that the frontend expects (text-start, text-delta, text-end,
     tool-input-start, tool-input-available, tool-output-available, finish).
     """
-    import logging as _logging
-    _log = _logging.getLogger(__name__)
-    _log.warning("[%s] stream_agent_response: starting", session_id[:8])
+    sid = session_id[:8]
+    log.info("[%s] stream_agent_response: starting", sid)
 
     # Track text part state
     text_part_id = str(uuid.uuid4())
@@ -137,6 +140,12 @@ async def stream_agent_response(
 
     # Track announced tool IDs so we only emit outputs for tools the frontend knows about
     announced_tool_ids: set[str] = set()
+
+    # Event flow tracking
+    t0 = time.monotonic()
+    event_counts: dict[str, int] = {}
+    subagent_event_count = 0
+    tool_calls_dispatched: list[str] = []
 
     try:
         async for message in client_manager.send_message(session_id, workspace, message_content):
@@ -154,6 +163,12 @@ async def stream_agent_response(
                 continue
 
             parent_id = getattr(message, "parent_tool_use_id", None)
+
+            # Count events by type
+            msg_type = type(message).__name__
+            event_counts[msg_type] = event_counts.get(msg_type, 0) + 1
+            if parent_id is not None:
+                subagent_event_count += 1
 
             # Handle UserMessage which contains tool results
             if isinstance(message, UserMessage):
@@ -196,6 +211,8 @@ async def stream_agent_response(
                         current_tool_input_json = ""
 
                         announced_tool_ids.add(current_tool_id)
+                        tool_calls_dispatched.append(current_tool_name or "unknown")
+                        log.info("[%s] tool call #%d: %s", sid, len(tool_calls_dispatched), current_tool_name)
                         yield {
                             "type": "tool-input-start",
                             "toolCallId": current_tool_id,
@@ -222,7 +239,13 @@ async def stream_agent_response(
                         try:
                             tool_input = json.loads(current_tool_input_json) if current_tool_input_json else {}
                         except json.JSONDecodeError:
+                            log.warning("[%s] tool input JSON parse failed for %s (len=%d)", sid, current_tool_name, len(current_tool_input_json))
                             tool_input = {"raw": current_tool_input_json}
+
+                        # Log subagent spawns and file operations with extra detail
+                        if current_tool_name == "Task":
+                            desc = tool_input.get("description", "")[:80] if isinstance(tool_input, dict) else ""
+                            log.info("[%s] Task dispatched: %s", sid, desc)
 
                         yield {
                             "type": "tool-input-available",
@@ -235,6 +258,11 @@ async def stream_agent_response(
                         current_tool_input_json = ""
 
             elif isinstance(message, AssistantMessage):
+                # Check for error field (rate_limit, server_error, etc.)
+                msg_error = getattr(message, "error", None)
+                if msg_error:
+                    log.warning("[%s] AssistantMessage error: %s", sid, msg_error)
+
                 if parent_id is not None:
                     # Subagent tool calls — announce as regular tool cards
                     for block in message.content:
@@ -245,6 +273,7 @@ async def stream_agent_response(
                                 text_part_id = str(uuid.uuid4())
 
                             announced_tool_ids.add(block.id)
+                            log.info("[%s] subagent(%s) tool: %s", sid, parent_id[:8], block.name)
                             yield {
                                 "type": "tool-input-start",
                                 "toolCallId": block.id,
@@ -258,6 +287,21 @@ async def stream_agent_response(
                             }
 
             elif isinstance(message, ResultMessage):
+                duration = time.monotonic() - t0
+                is_error = getattr(message, "is_error", False)
+                num_turns = getattr(message, "num_turns", None)
+                duration_ms = getattr(message, "duration_ms", None)
+                total_cost = getattr(message, "total_cost_usd", None)
+                usage = getattr(message, "usage", None)
+                log.info(
+                    "[%s] ResultMessage is_error=%s num_turns=%s duration_ms=%s cost_usd=%s usage=%s events=%s subagent_events=%d tools=%s wall=%.1fs",
+                    sid, is_error, num_turns, duration_ms, total_cost, usage,
+                    event_counts, subagent_event_count, tool_calls_dispatched, duration,
+                )
+                if is_error:
+                    result_text = getattr(message, "result", "")
+                    log.error("[%s] ResultMessage error: %s", sid, str(result_text)[:500])
+
                 if text_started:
                     yield {"type": "text-end", "id": text_part_id}
                     text_started = False
@@ -268,9 +312,11 @@ async def stream_agent_response(
         if text_started:
             yield {"type": "text-end", "id": text_part_id}
 
-        import logging, traceback
-        logging.getLogger(__name__).error(
-            "Orchestrator error:\n%s", traceback.format_exc()
+        duration = time.monotonic() - t0
+        log.error(
+            "[%s] orchestrator error after events=%s subagent_events=%d tools=%s wall=%.1fs",
+            sid, event_counts, subagent_event_count, tool_calls_dispatched, duration,
+            exc_info=True,
         )
         yield {"type": "error", "errorText": f"Agent error: {str(e)}"}
         yield {"type": "finish"}
