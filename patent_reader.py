@@ -4,6 +4,8 @@ import logging
 import re
 from dataclasses import dataclass, field, asdict
 
+from collections import Counter, defaultdict
+
 import httpx
 from bs4 import BeautifulSoup, Tag
 from fastapi import APIRouter, HTTPException
@@ -236,6 +238,106 @@ async def get_patent(publication_number: str):
                 if resp.status_code == 200:
                     data = _parse_patent_html(resp.text, candidate)
                     return asdict(data)
+            except httpx.HTTPError as exc:
+                logger.warning("Failed to fetch %s: %s", candidate, exc)
+                continue
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Patent not found. Tried: {', '.join(candidates)}",
+    )
+
+
+# ── Reference numerals ───────────────────────────────────────────────────
+
+_STOP_WORDS = frozenset(
+    "a an the of to for with by from on in and or said each at least one "
+    "its is are that this be wherein further".split()
+)
+
+# Matches "some words ( 110 )" or "some words ( 110a )"
+_REF_PATTERN = re.compile(
+    r"((?:\b[\w-]+\s+){1,5})\(\s*(\d+[a-zA-Z]?)\s*\)"
+)
+
+
+def _extract_reference_numerals(data: PatentData) -> list[dict]:
+    """Extract reference numeral → label mappings from patent text.
+
+    Scans abstract, description, and claims for patterns like "camera ( 110 )"
+    and returns a deduplicated list sorted by numeral.
+    """
+    # Collect all text
+    parts = [data.abstract]
+    for section in data.description:
+        parts.extend(section.paragraphs)
+    for claim in data.claims:
+        parts.append(claim.text)
+    all_text = " ".join(parts)
+
+    # Find all (context, numeral) pairs
+    num_labels: defaultdict[str, list[str]] = defaultdict(list)
+    for match in _REF_PATTERN.finditer(all_text):
+        context = match.group(1).strip()
+        numeral = match.group(2)
+
+        # Clean label: take last 1-4 words, strip leading/trailing stop words
+        words = context.split()[-4:]
+        while words and words[0].lower() in _STOP_WORDS:
+            words = words[1:]
+        while words and words[-1].lower() in _STOP_WORDS:
+            words = words[:-1]
+        if not words:
+            continue
+        label = " ".join(words).lower()
+        # Strip common prepositional noise from label
+        label = re.sub(r"^.*?\b(?:of|from|on|via|into|over)\s+(?:a|an|the)\s+", "", label)
+        if not label:
+            continue
+
+        # Skip likely method step numbers (single word that's a verb/gerund)
+        if len(words) == 1 and words[0].endswith("ing"):
+            continue
+
+        num_labels[numeral].append(label)
+
+    # Pick best label: among labels seen >1 time, prefer shortest; fallback to overall most common
+    results = []
+    for numeral, labels in num_labels.items():
+        counts = Counter(labels)
+        # Labels seen more than once
+        repeated = {l: c for l, c in counts.items() if c > 1}
+        if repeated:
+            best = min(repeated, key=len)
+        else:
+            best = counts.most_common(1)[0][0]
+        results.append({
+            "numeral": numeral,
+            "label": best,
+            "count": len(labels),
+        })
+
+    # Sort by numeric value
+    results.sort(key=lambda r: (int(re.match(r"\d+", r["numeral"]).group()), r["numeral"]))  # type: ignore[union-attr]
+    return results
+
+
+@router.get("/{publication_number}/reference-numerals")
+async def get_reference_numerals(publication_number: str):
+    """Extract reference numeral → label mappings from a patent.
+
+    Returns a list of {numeral, label, count} objects sorted by numeral.
+    """
+    candidates = _normalize_pub_number(publication_number)
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+        for candidate in candidates:
+            url = f"https://patents.google.com/patent/{candidate}/en"
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = _parse_patent_html(resp.text, candidate)
+                    return {"numerals": _extract_reference_numerals(data)}
             except httpx.HTTPError as exc:
                 logger.warning("Failed to fetch %s: %s", candidate, exc)
                 continue
