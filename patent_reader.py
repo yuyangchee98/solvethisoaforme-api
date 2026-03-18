@@ -43,6 +43,7 @@ class PatentData:
     claims: list[PatentClaim]
     description: list[PatentSection]
     pdf_url: str = ""
+    figure_urls: list[str] = field(default_factory=list)
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────
@@ -192,6 +193,14 @@ def _parse_patent_html(html: str, pub_number: str) -> PatentData:
                     type="dependent" if depends_on is not None else "independent",
                 ))
 
+    # Figures — extract full-resolution image URLs from <meta itemprop="full"> elements
+    # (the sibling <img itemprop="thumbnail"> contains low-res 111px thumbnails)
+    figure_urls: list[str] = []
+    for meta in soup.find_all("meta", itemprop="full"):
+        url = meta.get("content", "")
+        if "patentimages.storage.googleapis.com" in url and url.endswith(".png"):
+            figure_urls.append(url)
+
     return PatentData(
         title=title,
         patent_number=pub_number,
@@ -204,6 +213,7 @@ def _parse_patent_html(html: str, pub_number: str) -> PatentData:
         claims=claims,
         description=sections,
         pdf_url=pdf_url,
+        figure_urls=figure_urls,
     )
 
 
