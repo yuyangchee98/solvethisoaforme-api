@@ -27,9 +27,15 @@ class PatentClaim:
 
 
 @dataclass
+class PatentParagraph:
+    text: str
+    number: str | None = None  # e.g. "0001", absent for some patents
+
+
+@dataclass
 class PatentSection:
     heading: str
-    paragraphs: list[str]
+    paragraphs: list[PatentParagraph]
 
 
 @dataclass
@@ -144,7 +150,7 @@ def _parse_patent_html(html: str, pub_number: str) -> PatentData:
             )
             if desc_container:
                 current_heading = "DESCRIPTION"
-                current_paras: list[str] = []
+                current_paras: list[PatentParagraph] = []
                 for child in desc_container.children:
                     if not isinstance(child, Tag):
                         continue
@@ -159,7 +165,8 @@ def _parse_patent_html(html: str, pub_number: str) -> PatentData:
                             continue
                         text = child.get_text(separator=" ", strip=True)
                         if text:
-                            current_paras.append(text)
+                            num = child.get("num") or None
+                            current_paras.append(PatentParagraph(text=text, number=num))
                 if current_paras:
                     sections.append(PatentSection(heading=current_heading, paragraphs=current_paras))
 
@@ -255,9 +262,24 @@ _STOP_WORDS = frozenset(
     "its is are that this be wherein further".split()
 )
 
-# Matches "some words ( 110 )" or "some words ( 110a )"
-_REF_PATTERN = re.compile(
+# Pattern 1: parenthesized — "camera ( 110 )" or "camera (110a)"
+_REF_PAREN = re.compile(
     r"((?:\b[\w-]+\s+){1,5})\(\s*(\d+[a-zA-Z]?)\s*\)"
+)
+# Pattern 2: bare — "camera 110" or "layers 602"
+# Requires a letter-word immediately before the number, and the number is 1-5 digits
+_REF_BARE = re.compile(
+    r"((?:\b[a-zA-Z][\w-]*\s+){1,5})"
+    r"(\d{1,5}[a-zA-Z]?)"
+    r"(?=[\s,;.\)\]]|$)"
+)
+# Contexts to skip for bare numerals (FIG. 1, claim 2, step 3, etc.)
+_BARE_SKIP = re.compile(
+    r"(?:fig\.?|figure|claim|step|page|table|example|section"
+    r"|mm|cm|km|m|ms|nm|μm|hz|khz|mhz|ghz|mb|gb|kb|percent|%"
+    r"|length|stride|size|width|height|depth|count|number|about|approximately|least|than"
+    r"|version|v|no|nos|vol|chapter|paragraph|col|row|eq|equ)\s*$",
+    re.I,
 )
 
 
@@ -270,17 +292,15 @@ def _extract_reference_numerals(data: PatentData) -> list[dict]:
     # Collect all text
     parts = [data.abstract]
     for section in data.description:
-        parts.extend(section.paragraphs)
+        parts.extend(p.text for p in section.paragraphs)
     for claim in data.claims:
         parts.append(claim.text)
     all_text = " ".join(parts)
 
-    # Find all (context, numeral) pairs
+    # Find all (context, numeral) pairs from both patterns
     num_labels: defaultdict[str, list[str]] = defaultdict(list)
-    for match in _REF_PATTERN.finditer(all_text):
-        context = match.group(1).strip()
-        numeral = match.group(2)
 
+    def _add_match(context: str, numeral: str) -> None:
         # Clean label: take last 1-4 words, strip leading/trailing stop words
         words = context.split()[-4:]
         while words and words[0].lower() in _STOP_WORDS:
@@ -288,18 +308,30 @@ def _extract_reference_numerals(data: PatentData) -> list[dict]:
         while words and words[-1].lower() in _STOP_WORDS:
             words = words[:-1]
         if not words:
-            continue
+            return
         label = " ".join(words).lower()
         # Strip common prepositional noise from label
         label = re.sub(r"^.*?\b(?:of|from|on|via|into|over)\s+(?:a|an|the)\s+", "", label)
         if not label:
-            continue
-
+            return
         # Skip likely method step numbers (single word that's a verb/gerund)
         if len(words) == 1 and words[0].endswith("ing"):
-            continue
-
+            return
+        # Skip numerals that are clearly not references (units, dimensions like 3D)
+        if re.match(r"^\d+[dD]$", numeral):  # 2D, 3D, 4D
+            return
         num_labels[numeral].append(label)
+
+    # Pattern 1: parenthesized references — "camera ( 110 )"
+    for match in _REF_PAREN.finditer(all_text):
+        _add_match(match.group(1).strip(), match.group(2))
+
+    # Pattern 2: bare references — "camera 110"
+    for match in _REF_BARE.finditer(all_text):
+        context = match.group(1).strip()
+        if _BARE_SKIP.search(context):
+            continue
+        _add_match(context, match.group(2))
 
     # Pick best label: among labels seen >1 time, prefer shortest; fallback to overall most common
     results = []
