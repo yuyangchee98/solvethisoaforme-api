@@ -1,5 +1,7 @@
 """Patent Reader API — fetch and return structured patent data from Google Patents."""
 
+import asyncio
+import io
 import logging
 import re
 from dataclasses import dataclass, field, asdict
@@ -7,8 +9,12 @@ from dataclasses import dataclass, field, asdict
 from collections import Counter, defaultdict
 
 import httpx
+import numpy as np
 from bs4 import BeautifulSoup, Tag
 from fastapi import APIRouter, HTTPException
+from PIL import Image
+
+import pytesseract
 
 logger = logging.getLogger(__name__)
 
@@ -370,6 +376,231 @@ async def get_reference_numerals(publication_number: str):
                 if resp.status_code == 200:
                     data = _parse_patent_html(resp.text, candidate)
                     return {"numerals": _extract_reference_numerals(data)}
+            except httpx.HTTPError as exc:
+                logger.warning("Failed to fetch %s: %s", candidate, exc)
+                continue
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Patent not found. Tried: {', '.join(candidates)}",
+    )
+
+
+# ── Figure map via OCR ───────────────────────────────────────────────────
+
+# Match "Fig. 11" but also OCR misreads like "Fig. ii", "Hig. l3", "Fig, 1I"
+_FIG_PATTERN = re.compile(r"[FfHh]ig(?:ure)?\s*[.,;:]?\s*([0-9ilIoO]+[a-zA-Z]?)", re.IGNORECASE)
+
+
+def _fix_ocr_digits(s: str) -> str | None:
+    """Normalize common OCR misreads in figure numbers: i/l/I→1, O/o→0."""
+    fixed = s.translate(str.maketrans("ilIoO", "11100"))
+    # Must be a valid figure number (starts with digit, not all zeros)
+    if re.match(r"^\d+[a-zA-Z]?$", fixed) and fixed.lstrip("0"):
+        return fixed.lstrip("0")
+    return None
+
+
+def _try_ocr_rotations(img: Image.Image) -> list[str]:
+    """Try OCR on an image at 3 rotations (0°, -90°, 90°), return figure numbers found."""
+    for angle in [0, -90, 90]:
+        rotated = img.rotate(angle, expand=True) if angle != 0 else img
+        text = pytesseract.image_to_string(rotated, config="--psm 11")
+        raw_matches = _FIG_PATTERN.findall(text)
+        if raw_matches:
+            fixed = set()
+            for m in raw_matches:
+                f = _fix_ocr_digits(m)
+                if f:
+                    fixed.add(f)
+            if fixed:
+                return list(fixed)
+    return []
+
+
+def _remove_line_art(img: Image.Image) -> Image.Image:
+    """Binarize a grayscale image and remove horizontal/vertical runs > 50px."""
+    arr = np.array(img)
+    binary = (arr < 128).astype(np.uint8)
+    cleaned = binary.copy()
+    min_line = 50
+
+    for y in range(cleaned.shape[0]):
+        row = cleaned[y]
+        start = None
+        for x in range(len(row)):
+            if row[x] == 1:
+                if start is None:
+                    start = x
+            else:
+                if start is not None:
+                    if x - start > min_line:
+                        cleaned[y, start:x] = 0
+                    start = None
+        if start is not None and len(row) - start > min_line:
+            cleaned[y, start:] = 0
+
+    for x in range(cleaned.shape[1]):
+        col = cleaned[:, x]
+        start = None
+        for y in range(len(col)):
+            if col[y] == 1:
+                if start is None:
+                    start = y
+            else:
+                if start is not None:
+                    if y - start > min_line:
+                        cleaned[start:y, x] = 0
+                    start = None
+        if start is not None and len(col) - start > min_line:
+            cleaned[start:, x] = 0
+
+    return Image.fromarray(((1 - cleaned) * 255).astype(np.uint8))
+
+
+def _ocr_figure_numbers(img_bytes: bytes, mode: str = "raw") -> list[str]:
+    """Extract figure numbers from a patent drawing sheet via OCR.
+
+    mode="raw": try raw grayscale first, then line-removed fallback.
+    mode="line_removed": only try line-removed (used for outlier retry).
+    """
+    img = Image.open(io.BytesIO(img_bytes)).convert("L")
+
+    if mode == "raw":
+        results = _try_ocr_rotations(img)
+        if results:
+            return results
+
+    line_removed = _remove_line_art(img)
+    return _try_ocr_rotations(line_removed)
+
+
+def _fig_numeric_part(fig_num: str) -> int:
+    """Extract the numeric part of a figure number (e.g. '17A' → 17)."""
+    m = re.match(r"(\d+)", fig_num)
+    return int(m.group(1)) if m else 0
+
+
+def _find_outlier_sheets(
+    sheet_results: dict[int, list[str]],
+) -> set[int]:
+    """Identify sheets whose figure numbers are statistical outliers (IQR method)."""
+    all_nums = []
+    for figs in sheet_results.values():
+        all_nums.extend(_fig_numeric_part(f) for f in figs)
+
+    if len(all_nums) < 4:
+        return set()
+
+    all_nums.sort()
+    q1 = all_nums[len(all_nums) // 4]
+    q3 = all_nums[3 * len(all_nums) // 4]
+    iqr = q3 - q1
+    upper_fence = q3 + 1.5 * iqr
+
+    outlier_sheets = set()
+    for idx, figs in sheet_results.items():
+        for f in figs:
+            if _fig_numeric_part(f) > upper_fence:
+                outlier_sheets.add(idx)
+    return outlier_sheets
+
+
+async def _build_figure_map(figure_urls: list[str]) -> dict[str, int]:
+    """Download drawing sheets and OCR them to map figure numbers to URL indices.
+
+    Strategy:
+    1. Raw OCR all sheets (parallel).
+    2. Cross-sheet outlier detection (IQR).
+    3. Re-OCR outlier sheets with line-removed; re-OCR empty sheets with line-removed.
+    4. Discard any results still flagged as outliers.
+    """
+    if len(figure_urls) <= 1:
+        return {}
+
+    # Download all sheets (skip cover at index 0), keep bytes for potential retry
+    sheet_bytes: dict[int, bytes] = {}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        async def _download(idx: int, url: str) -> None:
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    sheet_bytes[idx] = resp.content
+            except Exception as exc:
+                logger.warning("Download failed for sheet %d: %s", idx, exc)
+
+        await asyncio.gather(*[
+            _download(idx, url)
+            for idx, url in enumerate(figure_urls)
+            if idx > 0
+        ])
+
+    # Phase 1: Raw OCR all sheets
+    sheet_results: dict[int, list[str]] = {}
+    empty_sheets: set[int] = set()
+
+    async def _ocr_sheet(idx: int, mode: str) -> list[str]:
+        try:
+            return await asyncio.to_thread(
+                _ocr_figure_numbers, sheet_bytes[idx], mode,
+            )
+        except Exception as exc:
+            logger.warning("OCR failed for sheet %d: %s", idx, exc)
+            return []
+
+    raw_tasks = {idx: _ocr_sheet(idx, "raw") for idx in sheet_bytes}
+    raw_results = await asyncio.gather(*raw_tasks.values())
+    for idx, figs in zip(raw_tasks.keys(), raw_results):
+        if figs:
+            sheet_results[idx] = figs
+        else:
+            empty_sheets.add(idx)
+
+    # Phase 2: Find outlier sheets
+    outlier_sheets = _find_outlier_sheets(sheet_results)
+
+    # Phase 3: Re-OCR outlier + empty sheets with line-removed
+    retry_sheets = outlier_sheets | empty_sheets
+    if retry_sheets:
+        retry_tasks = {idx: _ocr_sheet(idx, "line_removed") for idx in retry_sheets}
+        retry_results = await asyncio.gather(*retry_tasks.values())
+        for idx, figs in zip(retry_tasks.keys(), retry_results):
+            sheet_results[idx] = figs  # replace (outlier) or fill (empty)
+
+    # Phase 4: Final outlier check — discard any remaining outliers
+    if outlier_sheets:
+        still_outliers = _find_outlier_sheets(sheet_results)
+        for idx in still_outliers:
+            sheet_results.pop(idx, None)
+
+    # Build map (first occurrence wins)
+    figure_map: dict[str, int] = {}
+    for idx in sorted(sheet_results):
+        for fig_num in sheet_results[idx]:
+            if fig_num not in figure_map:
+                figure_map[fig_num] = idx
+
+    return figure_map
+
+
+@router.get("/{publication_number}/figure-map")
+async def get_figure_map(publication_number: str):
+    """OCR patent drawing sheets to map figure numbers to drawing sheet indices.
+
+    Returns {"figure_map": {"1": 1, "2": 2, ...}} where keys are figure numbers
+    and values are indices into the figure_urls array.
+    """
+    candidates = _normalize_pub_number(publication_number)
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+        for candidate in candidates:
+            url = f"https://patents.google.com/patent/{candidate}/en"
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = _parse_patent_html(resp.text, candidate)
+                    figure_map = await _build_figure_map(data.figure_urls)
+                    return {"figure_map": figure_map}
             except httpx.HTTPError as exc:
                 logger.warning("Failed to fetch %s: %s", candidate, exc)
                 continue
