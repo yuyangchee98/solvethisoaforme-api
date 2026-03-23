@@ -14,6 +14,8 @@ import httpx
 from bs4 import BeautifulSoup, Tag
 from fastapi import APIRouter, HTTPException
 
+from core.nlp_models import nlp as spacy_nlp
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/patents", tags=["patents"])
@@ -261,39 +263,99 @@ async def get_patent(publication_number: str):
 
 # ── Reference numerals ───────────────────────────────────────────────────
 
-_STOP_WORDS = frozenset(
-    "a an the of to for with by from on in and or said each at least one "
-    "its is are that this be wherein further".split()
+_REF_NUM_PAT = re.compile(r"^\d{1,5}[a-zA-Z]?$")
+
+# Labels to skip — document structure references, not element names
+_SKIP_LABELS = frozenset(
+    "fig figs figure figures claim claims step steps page pages "
+    "table tables example examples section sections paragraph paragraphs "
+    "chapter chapters col row eq equ embodiment embodiments".split()
 )
 
-# Pattern 1: parenthesized — "camera ( 110 )" or "camera (110a)"
-_REF_PAREN = re.compile(
-    r"((?:\b[\w-]+\s+){1,5})\(\s*(\d+[a-zA-Z]?)\s*\)"
+_FIG_ENUM = re.compile(
+    r"(?:figs?\.?|figures?)\s+"           # trigger word
+    r"\d+[a-zA-Z]?"                       # first number
+    r"(?:"
+    r"  \s*,\s*\d+[a-zA-Z]?"             # comma-separated continuations
+    r"| \s+(?:and|or|to|through|-)\s+\d+[a-zA-Z]?"  # conjunction continuations
+    r")+",
+    re.I | re.X,
 )
-# Pattern 2: bare — "camera 110" or "layers 602"
-# Requires a letter-word immediately before the number, and the number is 1-5 digits
-_REF_BARE = re.compile(
-    r"((?:\b[a-zA-Z][\w-]*\s+){1,5})"
-    r"(\d{1,5}[a-zA-Z]?)"
-    r"(?=[\s,;.\)\]]|$)"
-)
-# Contexts to skip for bare numerals (FIG. 1, claim 2, step 3, etc.)
-_BARE_SKIP = re.compile(
-    r"(?:fig\.?|figure|claim|step|page|table|example|section"
-    r"|mm|cm|km|m|ms|nm|μm|hz|khz|mhz|ghz|mb|gb|kb|percent|%"
-    r"|length|stride|size|width|height|depth|count|number|about|approximately|least|than"
-    r"|version|v|no|nos|vol|chapter|paragraph|col|row|eq|equ)\s*$",
-    re.I,
-)
+_FIG_CONTINUATION_NUM = re.compile(r"\d+[a-zA-Z]?")
+
+
+def _build_fig_exclusion_zones(text: str) -> list[tuple[int, int]]:
+    """Find continuation numbers in figure enumerations like 'FIGS. 2 and 3'.
+
+    Returns character spans for every number AFTER the first in each enumeration.
+    """
+    zones = []
+    for m in _FIG_ENUM.finditer(text):
+        nums = list(_FIG_CONTINUATION_NUM.finditer(text, m.start(), m.end()))
+        for num_match in nums[1:]:  # skip first number
+            zones.append((num_match.start(), num_match.end()))
+    return zones
+
+
+def _build_exclusion_zones(text: str):
+    """Run spaCy NER and return (doc, exclusion_zones).
+
+    Exclusion zones are character spans for dates, quantities, units, and
+    figure enumeration continuations — positions where a number is NOT a
+    reference numeral.
+    """
+    doc = spacy_nlp(text)
+    _EXCLUDE_LABELS = {"DATE", "QUANTITY", "TIME", "PERCENT"}
+    zones = [(ent.start_char, ent.end_char) for ent in doc.ents if ent.label_ in _EXCLUDE_LABELS]
+    zones.extend(_build_fig_exclusion_zones(text))
+    zones.sort()
+    return doc, zones
+
+
+def _in_exclusion_zone(pos: int, zones: list[tuple[int, int]]) -> bool:
+    """Check if a character position falls inside any exclusion zone (binary search)."""
+    import bisect
+    idx = bisect.bisect_right(zones, (pos, float("inf"))) - 1
+    if idx >= 0:
+        start, end = zones[idx]
+        if start <= pos < end:
+            return True
+    return False
+
+
+def _chunk_label(chunk) -> str | None:
+    """Extract a clean label from a spaCy noun chunk.
+
+    Strips determiners, pronouns, adpositions, conjunctions, auxiliaries,
+    adverbs, particles, punctuation, and verbs. Returns None if nothing
+    meaningful remains.
+    """
+    _STRIP_POS = {"DET", "ADP", "CCONJ", "SCONJ", "PRON", "AUX", "ADV", "PART", "PUNCT", "VERB"}
+    tokens = list(chunk)
+    # Strip junk POS from the left
+    while tokens and tokens[0].pos_ in _STRIP_POS:
+        tokens = tokens[1:]
+    # Strip from both ends: punctuation chars (regardless of POS tag)
+    while tokens and not tokens[0].text.isalnum():
+        tokens = tokens[1:]
+    while tokens and not tokens[-1].text.isalnum():
+        tokens = tokens[:-1]
+    if not tokens:
+        return None
+    label = " ".join(t.text.lower() for t in tokens)
+    # Skip labels that are document structure references
+    clean = re.sub(r"[.\s]+$", "", label)
+    if clean in _SKIP_LABELS:
+        return None
+    return label
 
 
 def _extract_reference_numerals(data: PatentData) -> list[dict]:
     """Extract reference numeral → label mappings from patent text.
 
-    Scans abstract, description, and claims for patterns like "camera ( 110 )"
-    and returns a deduplicated list sorted by numeral.
+    Uses spaCy noun chunks to find element labels adjacent to reference numerals,
+    and NER-based exclusion zones to filter out dates, quantities, units, etc.
     """
-    # Collect all text
     parts = [data.abstract]
     for section in data.description:
         parts.extend(p.text for p in section.paragraphs)
@@ -301,47 +363,44 @@ def _extract_reference_numerals(data: PatentData) -> list[dict]:
         parts.append(claim.text)
     all_text = " ".join(parts)
 
-    # Find all (context, numeral) pairs from both patterns
+    doc, exclusion_zones = _build_exclusion_zones(all_text)
+
     num_labels: defaultdict[str, list[str]] = defaultdict(list)
 
-    def _add_match(context: str, numeral: str) -> None:
-        # Clean label: take last 1-4 words, strip leading/trailing stop words
-        words = context.split()[-4:]
-        while words and words[0].lower() in _STOP_WORDS:
-            words = words[1:]
-        while words and words[-1].lower() in _STOP_WORDS:
-            words = words[:-1]
-        if not words:
-            return
-        label = " ".join(words).lower()
-        # Strip common prepositional noise from label
-        label = re.sub(r"^.*?\b(?:of|from|on|via|into|over)\s+(?:a|an|the)\s+", "", label)
-        if not label:
-            return
-        # Skip likely method step numbers (single word that's a verb/gerund)
-        if len(words) == 1 and words[0].endswith("ing"):
-            return
-        # Skip numerals that are clearly not references (units, dimensions like 3D)
-        if re.match(r"^\d+[dD]$", numeral):  # 2D, 3D, 4D
-            return
-        num_labels[numeral].append(label)
-
-    # Pattern 1: parenthesized references — "camera ( 110 )"
-    for match in _REF_PAREN.finditer(all_text):
-        _add_match(match.group(1).strip(), match.group(2))
-
-    # Pattern 2: bare references — "camera 110"
-    for match in _REF_BARE.finditer(all_text):
-        context = match.group(1).strip()
-        if _BARE_SKIP.search(context):
+    for chunk in doc.noun_chunks:
+        end_idx = chunk.end
+        if end_idx >= len(doc):
             continue
-        _add_match(context, match.group(2))
+
+        next_tok = doc[end_idx]
+
+        # Case 1: bare reference — "camera 110"
+        if _REF_NUM_PAT.match(next_tok.text):
+            if _in_exclusion_zone(next_tok.idx, exclusion_zones):
+                continue
+            label = _chunk_label(chunk)
+            if label:
+                num_labels[next_tok.text].append(label)
+
+        # Case 2: parenthesized reference — "camera (110)" / "camera ( 110 )"
+        elif next_tok.text == "(":
+            # Look for number inside parens: ( 110 ) or (110)
+            paren_idx = end_idx + 1
+            # skip whitespace tokens
+            while paren_idx < len(doc) and doc[paren_idx].text.isspace():
+                paren_idx += 1
+            if paren_idx < len(doc) and _REF_NUM_PAT.match(doc[paren_idx].text):
+                num_tok = doc[paren_idx]
+                if _in_exclusion_zone(num_tok.idx, exclusion_zones):
+                    continue
+                label = _chunk_label(chunk)
+                if label:
+                    num_labels[num_tok.text].append(label)
 
     # Pick best label: among labels seen >1 time, prefer shortest; fallback to overall most common
     results = []
     for numeral, labels in num_labels.items():
         counts = Counter(labels)
-        # Labels seen more than once
         repeated = {l: c for l, c in counts.items() if c > 1}
         if repeated:
             best = min(repeated, key=len)
@@ -353,7 +412,6 @@ def _extract_reference_numerals(data: PatentData) -> list[dict]:
             "count": len(labels),
         })
 
-    # Sort by numeric value
     results.sort(key=lambda r: (int(re.match(r"\d+", r["numeral"]).group()), r["numeral"]))  # type: ignore[union-attr]
     return results
 
@@ -386,7 +444,7 @@ async def get_reference_numerals(publication_number: str):
 
 # ── Figure map via Google Vision OCR ──────────────────────────────────────
 
-_FIG_PATTERN = re.compile(r"Fig(?:ure)?\s*[.,;:]?\s*(\d+[a-zA-Z]?)", re.IGNORECASE)
+_FIG_PATTERN = re.compile(r"Fig(?:ure)?\s*[.,;:]?\s*(\d+(?:[a-zA-Z]|-\d+)?)", re.IGNORECASE)
 _NUMERAL_PATTERN = re.compile(r"^\d{1,5}[a-zA-Z]?$")
 
 _VISION_API_URL = "https://vision.googleapis.com/v1/images:annotate"
@@ -496,6 +554,8 @@ async def _build_figure_map(
 
         async def _ocr_sheet(idx: int) -> None:
             figs, bboxes = await _vision_ocr_sheet(sheet_bytes[idx], client)
+            numerals = [b["numeral"] for b in bboxes]
+            logger.info("[OCR] sheet %d → figs=%s  numerals=%s", idx, figs, numerals)
             if figs:
                 sheet_figs[idx] = figs
             if bboxes:
