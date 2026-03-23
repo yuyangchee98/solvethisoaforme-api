@@ -5,6 +5,7 @@ import base64
 import logging
 import os
 import re
+import struct
 from dataclasses import dataclass, field, asdict
 
 from collections import Counter, defaultdict
@@ -386,16 +387,29 @@ async def get_reference_numerals(publication_number: str):
 # ── Figure map via Google Vision OCR ──────────────────────────────────────
 
 _FIG_PATTERN = re.compile(r"Fig(?:ure)?\s*[.,;:]?\s*(\d+[a-zA-Z]?)", re.IGNORECASE)
+_NUMERAL_PATTERN = re.compile(r"^\d{1,5}[a-zA-Z]?$")
 
 _VISION_API_URL = "https://vision.googleapis.com/v1/images:annotate"
 
 
-async def _vision_ocr_figure_numbers(img_bytes: bytes, client: httpx.AsyncClient) -> list[str]:
-    """Send image to Google Vision TEXT_DETECTION and extract figure numbers."""
+def _png_dimensions(data: bytes) -> tuple[int, int]:
+    """Read width and height from a PNG file header."""
+    w, h = struct.unpack(">II", data[16:24])
+    return w, h
+
+
+async def _vision_ocr_sheet(
+    img_bytes: bytes, client: httpx.AsyncClient,
+) -> tuple[list[str], list[dict]]:
+    """Send image to Google Vision TEXT_DETECTION.
+
+    Returns (figure_numbers, numeral_bboxes) where numeral_bboxes contains
+    normalized 0-1 bounding boxes for every standalone number detected.
+    """
     api_key = os.environ.get("GOOGLE_VISION_API_KEY", "")
     if not api_key:
         logger.warning("GOOGLE_VISION_API_KEY not set, skipping figure OCR")
-        return []
+        return [], []
 
     resp = await client.post(
         _VISION_API_URL,
@@ -410,21 +424,53 @@ async def _vision_ocr_figure_numbers(img_bytes: bytes, client: httpx.AsyncClient
     )
     if resp.status_code != 200:
         logger.warning("Vision API error %d: %s", resp.status_code, resp.text[:200])
-        return []
+        return [], []
 
     annotations = resp.json().get("responses", [{}])[0].get("textAnnotations", [])
     if not annotations:
-        return []
+        return [], []
 
+    # Figure numbers from full text block
     full_text = annotations[0]["description"]
-    matches = _FIG_PATTERN.findall(full_text)
-    return list(dict.fromkeys(m.lstrip("0") or "0" for m in matches))  # dedupe, preserve order
+    fig_matches = _FIG_PATTERN.findall(full_text)
+    figure_numbers = list(dict.fromkeys(m.lstrip("0") or "0" for m in fig_matches))
+
+    # Bounding boxes for standalone numerals (reference numerals)
+    img_w, img_h = _png_dimensions(img_bytes)
+    numeral_bboxes: list[dict] = []
+    for ann in annotations[1:]:
+        desc = ann["description"]
+        if not _NUMERAL_PATTERN.match(desc):
+            continue
+        numeral = desc.lstrip("0") or "0"
+        verts = ann.get("boundingPoly", {}).get("vertices", [])
+        if len(verts) < 4:
+            continue
+        xs = [v.get("x", 0) for v in verts]
+        ys = [v.get("y", 0) for v in verts]
+        x_min, x_max = min(xs), max(xs)
+        y_min, y_max = min(ys), max(ys)
+        numeral_bboxes.append({
+            "numeral": numeral,
+            "x": x_min / img_w,
+            "y": y_min / img_h,
+            "w": (x_max - x_min) / img_w,
+            "h": (y_max - y_min) / img_h,
+        })
+
+    return figure_numbers, numeral_bboxes
 
 
-async def _build_figure_map(figure_urls: list[str]) -> dict[str, int]:
-    """Download drawing sheets and OCR via Google Vision to map figure numbers to URL indices."""
+async def _build_figure_map(
+    figure_urls: list[str],
+) -> tuple[dict[str, int], dict[str, list[dict]]]:
+    """Download drawing sheets and OCR via Google Vision.
+
+    Returns (figure_map, numeral_locations) where numeral_locations maps each
+    detected numeral to a list of {sheet, x, y, w, h} normalized bounding boxes.
+    """
     if len(figure_urls) <= 1:
-        return {}
+        return {}, {}
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         # Download all sheets (skip cover at index 0)
@@ -445,23 +491,34 @@ async def _build_figure_map(figure_urls: list[str]) -> dict[str, int]:
         ])
 
         # OCR all sheets via Google Vision (parallel)
-        sheet_results: dict[int, list[str]] = {}
+        sheet_figs: dict[int, list[str]] = {}
+        sheet_bboxes: dict[int, list[dict]] = {}
 
         async def _ocr_sheet(idx: int) -> None:
-            figs = await _vision_ocr_figure_numbers(sheet_bytes[idx], client)
+            figs, bboxes = await _vision_ocr_sheet(sheet_bytes[idx], client)
             if figs:
-                sheet_results[idx] = figs
+                sheet_figs[idx] = figs
+            if bboxes:
+                sheet_bboxes[idx] = bboxes
 
         await asyncio.gather(*[_ocr_sheet(idx) for idx in sheet_bytes])
 
-    # Build map (first occurrence wins)
+    # Build figure map (first occurrence wins)
     figure_map: dict[str, int] = {}
-    for idx in sorted(sheet_results):
-        for fig_num in sheet_results[idx]:
+    for idx in sorted(sheet_figs):
+        for fig_num in sheet_figs[idx]:
             if fig_num not in figure_map:
                 figure_map[fig_num] = idx
 
-    return figure_map
+    # Build numeral locations
+    numeral_locations: dict[str, list[dict]] = {}
+    for idx in sorted(sheet_bboxes):
+        for bbox in sheet_bboxes[idx]:
+            numeral = bbox["numeral"]
+            entry = {"sheet": idx, "x": bbox["x"], "y": bbox["y"], "w": bbox["w"], "h": bbox["h"]}
+            numeral_locations.setdefault(numeral, []).append(entry)
+
+    return figure_map, numeral_locations
 
 
 @router.get("/{publication_number}/figure-map")
@@ -480,8 +537,11 @@ async def get_figure_map(publication_number: str):
                 resp = await client.get(url)
                 if resp.status_code == 200:
                     data = _parse_patent_html(resp.text, candidate)
-                    figure_map = await _build_figure_map(data.figure_urls)
-                    return {"figure_map": figure_map}
+                    figure_map, numeral_locations = await _build_figure_map(data.figure_urls)
+                    return {
+                        "figure_map": figure_map,
+                        "numeral_locations": numeral_locations,
+                    }
             except httpx.HTTPError as exc:
                 logger.warning("Failed to fetch %s: %s", candidate, exc)
                 continue
