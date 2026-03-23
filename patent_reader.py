@@ -330,10 +330,11 @@ def _chunk_label(chunk) -> str | None:
     adverbs, particles, punctuation, and verbs. Returns None if nothing
     meaningful remains.
     """
-    _STRIP_POS = {"DET", "ADP", "CCONJ", "SCONJ", "PRON", "AUX", "ADV", "PART", "PUNCT", "VERB"}
+    _STRIP_POS = {"DET", "ADP", "CCONJ", "SCONJ", "PRON", "AUX", "ADV", "PART", "PUNCT"}
     tokens = list(chunk)
-    # Strip junk POS from the left
-    while tokens and tokens[0].pos_ in _STRIP_POS:
+    # Strip junk POS from the left — but keep past participles (VBN) acting as adjectives
+    while tokens and (tokens[0].pos_ in _STRIP_POS
+                       or (tokens[0].pos_ == "VERB" and tokens[0].tag_ != "VBN")):
         tokens = tokens[1:]
     # Strip from both ends: punctuation chars (regardless of POS tag)
     while tokens and not tokens[0].text.isalnum():
@@ -343,6 +344,8 @@ def _chunk_label(chunk) -> str | None:
     if not tokens:
         return None
     label = " ".join(t.text.lower() for t in tokens)
+    # Clean up possessive tokenization: "subject 's eye" → "subject's eye"
+    label = label.replace(" 's", "'s")
     # Skip labels that are document structure references
     clean = re.sub(r"[.\s]+$", "", label)
     if clean in _SKIP_LABELS:
@@ -350,22 +353,45 @@ def _chunk_label(chunk) -> str | None:
     return label
 
 
-def _extract_reference_numerals(data: PatentData) -> list[dict]:
-    """Extract reference numeral → label mappings from patent text.
+def _extract_reference_numerals(data: PatentData) -> dict:
+    """Extract reference numeral → label mappings and highlight positions from patent text.
 
     Uses spaCy noun chunks to find element labels adjacent to reference numerals,
     and NER-based exclusion zones to filter out dates, quantities, units, etc.
+
+    Returns {numerals: [...], highlights: {abstract: [...], description: [[...]], claims: [[...]]}}.
     """
-    parts = [data.abstract]
-    for section in data.description:
-        parts.extend(p.text for p in section.paragraphs)
-    for claim in data.claims:
-        parts.append(claim.text)
+    # Build text parts with offset tracking.
+    # Each entry: (text, seg_key) where seg_key is ("abstract",) | ("description", si, pi) | ("claims", ci)
+    segments: list[tuple[str, tuple]] = []
+    segments.append((data.abstract, ("abstract",)))
+    for si, section in enumerate(data.description):
+        for pi, para in enumerate(section.paragraphs):
+            segments.append((para.text, ("description", si, pi)))
+    for ci, claim in enumerate(data.claims):
+        segments.append((claim.text, ("claims", ci)))
+
+    # Join with spaces and track each segment's start offset in all_text
+    seg_offsets: list[tuple[int, int, tuple]] = []  # (start, end, seg_key)
+    parts = []
+    offset = 0
+    for text, key in segments:
+        seg_offsets.append((offset, offset + len(text), key))
+        parts.append(text)
+        offset += len(text) + 1  # +1 for the joining space
     all_text = " ".join(parts)
 
     doc, exclusion_zones = _build_exclusion_zones(all_text)
 
     num_labels: defaultdict[str, list[str]] = defaultdict(list)
+    # Collect highlight positions as (char_start, char_end, numeral) in all_text
+    raw_highlights: list[tuple[int, int, str]] = []
+
+    def _record_match(num_tok, chunk):
+        label = _chunk_label(chunk)
+        if label:
+            num_labels[num_tok.text].append(label)
+            raw_highlights.append((num_tok.idx, num_tok.idx + len(num_tok.text), num_tok.text))
 
     for chunk in doc.noun_chunks:
         end_idx = chunk.end
@@ -378,27 +404,21 @@ def _extract_reference_numerals(data: PatentData) -> list[dict]:
         if _REF_NUM_PAT.match(next_tok.text):
             if _in_exclusion_zone(next_tok.idx, exclusion_zones):
                 continue
-            label = _chunk_label(chunk)
-            if label:
-                num_labels[next_tok.text].append(label)
+            _record_match(next_tok, chunk)
 
         # Case 2: parenthesized reference — "camera (110)" / "camera ( 110 )"
         elif next_tok.text == "(":
-            # Look for number inside parens: ( 110 ) or (110)
             paren_idx = end_idx + 1
-            # skip whitespace tokens
             while paren_idx < len(doc) and doc[paren_idx].text.isspace():
                 paren_idx += 1
             if paren_idx < len(doc) and _REF_NUM_PAT.match(doc[paren_idx].text):
                 num_tok = doc[paren_idx]
                 if _in_exclusion_zone(num_tok.idx, exclusion_zones):
                     continue
-                label = _chunk_label(chunk)
-                if label:
-                    num_labels[num_tok.text].append(label)
+                _record_match(num_tok, chunk)
 
-    # Pick best label: among labels seen >1 time, prefer shortest; fallback to overall most common
-    results = []
+    # Pick best label
+    numerals = []
     for numeral, labels in num_labels.items():
         counts = Counter(labels)
         repeated = {l: c for l, c in counts.items() if c > 1}
@@ -406,21 +426,47 @@ def _extract_reference_numerals(data: PatentData) -> list[dict]:
             best = min(repeated, key=len)
         else:
             best = counts.most_common(1)[0][0]
-        results.append({
+        numerals.append({
             "numeral": numeral,
             "label": best,
             "count": len(labels),
         })
+    numerals.sort(key=lambda r: (int(re.match(r"\d+", r["numeral"]).group()), r["numeral"]))  # type: ignore[union-attr]
 
-    results.sort(key=lambda r: (int(re.match(r"\d+", r["numeral"]).group()), r["numeral"]))  # type: ignore[union-attr]
-    return results
+    # Map highlight positions back to source segments
+    import bisect
+    seg_starts = [s for s, _, _ in seg_offsets]
+
+    highlights: dict = {
+        "abstract": [],
+        "description": [[[] for _ in sec.paragraphs] for sec in data.description],
+        "claims": [[] for _ in data.claims],
+    }
+    for abs_start, abs_end, numeral in raw_highlights:
+        idx = bisect.bisect_right(seg_starts, abs_start) - 1
+        if idx < 0:
+            continue
+        seg_start, seg_end, seg_key = seg_offsets[idx]
+        if abs_start >= seg_end:
+            continue  # falls in the joining space
+        rel_start = abs_start - seg_start
+        rel_end = abs_end - seg_start
+        span = {"start": rel_start, "end": rel_end, "numeral": numeral}
+        if seg_key[0] == "abstract":
+            highlights["abstract"].append(span)
+        elif seg_key[0] == "description":
+            highlights["description"][seg_key[1]][seg_key[2]].append(span)
+        elif seg_key[0] == "claims":
+            highlights["claims"][seg_key[1]].append(span)
+
+    return {"numerals": numerals, "highlights": highlights}
 
 
 @router.get("/{publication_number}/reference-numerals")
 async def get_reference_numerals(publication_number: str):
-    """Extract reference numeral → label mappings from a patent.
+    """Extract reference numeral → label mappings and highlight positions from a patent.
 
-    Returns a list of {numeral, label, count} objects sorted by numeral.
+    Returns {numerals: [...], highlights: {abstract: [...], description: [[...]], claims: [[...]]}}.
     """
     candidates = _normalize_pub_number(publication_number)
 
@@ -431,7 +477,7 @@ async def get_reference_numerals(publication_number: str):
                 resp = await client.get(url)
                 if resp.status_code == 200:
                     data = _parse_patent_html(resp.text, candidate)
-                    return {"numerals": _extract_reference_numerals(data)}
+                    return _extract_reference_numerals(data)
             except httpx.HTTPError as exc:
                 logger.warning("Failed to fetch %s: %s", candidate, exc)
                 continue
@@ -497,10 +543,12 @@ async def _vision_ocr_sheet(
     img_w, img_h = _png_dimensions(img_bytes)
     numeral_bboxes: list[dict] = []
     for ann in annotations[1:]:
-        desc = ann["description"]
+        desc = ann["description"].rstrip("-–—.,;:°")
         if not _NUMERAL_PATTERN.match(desc):
             continue
         numeral = desc.lstrip("0") or "0"
+        if numeral == "0":
+            continue
         verts = ann.get("boundingPoly", {}).get("vertices", [])
         if len(verts) < 4:
             continue
