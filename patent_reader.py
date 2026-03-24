@@ -541,7 +541,21 @@ async def _vision_ocr_sheet(
 
     # Bounding boxes for standalone numerals (reference numerals)
     img_w, img_h = _png_dimensions(img_bytes)
-    numeral_bboxes: list[dict] = []
+
+    # Collect "FIG"/"Figure" token pixel bboxes
+    fig_tokens: list[tuple[int, int, int, int]] = []  # (x_min, x_max, y_min, y_max)
+    for ann in annotations[1:]:
+        if re.match(r"^(?:FIG|Figure)\.?$", ann["description"], re.IGNORECASE):
+            verts = ann.get("boundingPoly", {}).get("vertices", [])
+            if len(verts) >= 4:
+                xs = [v.get("x", 0) for v in verts]
+                ys = [v.get("y", 0) for v in verts]
+                fig_tokens.append((min(xs), max(xs), min(ys), max(ys)))
+    fig_number_set = set(figure_numbers)
+
+    # Build candidate numerals with pixel bounds for distance checks
+    # Each: (bbox_dict, cx, cy, numeral, px_x_min, px_x_max, px_y_min, px_y_max)
+    candidates: list[tuple[dict, float, float, str, int, int, int, int]] = []
     for ann in annotations[1:]:
         desc = ann["description"].rstrip("-–—.,;:°")
         if not _NUMERAL_PATTERN.match(desc):
@@ -556,15 +570,51 @@ async def _vision_ocr_sheet(
         ys = [v.get("y", 0) for v in verts]
         x_min, x_max = min(xs), max(xs)
         y_min, y_max = min(ys), max(ys)
-        numeral_bboxes.append({
+        cx, cy = (x_min + x_max) / 2, (y_min + y_max) / 2
+        bbox = {
             "numeral": numeral,
             "x": x_min / img_w,
             "y": y_min / img_h,
             "w": (x_max - x_min) / img_w,
             "h": (y_max - y_min) / img_h,
-        })
+        }
+        candidates.append((bbox, cx, cy, numeral, x_min, x_max, y_min, y_max))
 
-    return figure_numbers, numeral_bboxes
+    # For each FIG token, find the closest candidate matching a known figure number.
+    # Build a combined bbox (FIG token ∪ number token) as a "figure" label bbox.
+    fig_label_bboxes: list[dict] = []
+    excluded: set[int] = set()
+    for fx_min, fx_max, fy_min, fy_max in fig_tokens:
+        fcx, fcy = (fx_min + fx_max) / 2, (fy_min + fy_max) / 2
+        best_idx = -1
+        best_dist = float("inf")
+        for i, (_, cx, cy, numeral, *_px) in enumerate(candidates):
+            if i in excluded or numeral not in fig_number_set:
+                continue
+            dist = (cx - fcx) ** 2 + (cy - fcy) ** 2
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = i
+        if best_idx >= 0:
+            excluded.add(best_idx)
+            _, _, _, numeral, nx_min, nx_max, ny_min, ny_max = candidates[best_idx]
+            # Union of FIG token and number token
+            ux_min = min(fx_min, nx_min)
+            ux_max = max(fx_max, nx_max)
+            uy_min = min(fy_min, ny_min)
+            uy_max = max(fy_max, ny_max)
+            fig_label_bboxes.append({
+                "numeral": numeral,
+                "x": ux_min / img_w,
+                "y": uy_min / img_h,
+                "w": (ux_max - ux_min) / img_w,
+                "h": (uy_max - uy_min) / img_h,
+                "type": "figure",
+            })
+
+    numeral_bboxes = [bbox for i, (bbox, *_) in enumerate(candidates) if i not in excluded]
+
+    return figure_numbers, numeral_bboxes, fig_label_bboxes
 
 
 async def _build_figure_map(
@@ -599,15 +649,18 @@ async def _build_figure_map(
         # OCR all sheets via Google Vision (parallel)
         sheet_figs: dict[int, list[str]] = {}
         sheet_bboxes: dict[int, list[dict]] = {}
+        sheet_fig_labels: dict[int, list[dict]] = {}
 
         async def _ocr_sheet(idx: int) -> None:
-            figs, bboxes = await _vision_ocr_sheet(sheet_bytes[idx], client)
+            figs, bboxes, fig_labels = await _vision_ocr_sheet(sheet_bytes[idx], client)
             numerals = [b["numeral"] for b in bboxes]
             logger.info("[OCR] sheet %d → figs=%s  numerals=%s", idx, figs, numerals)
             if figs:
                 sheet_figs[idx] = figs
             if bboxes:
                 sheet_bboxes[idx] = bboxes
+            if fig_labels:
+                sheet_fig_labels[idx] = fig_labels
 
         await asyncio.gather(*[_ocr_sheet(idx) for idx in sheet_bytes])
 
@@ -618,13 +671,18 @@ async def _build_figure_map(
             if fig_num not in figure_map:
                 figure_map[fig_num] = idx
 
-    # Build numeral locations
+    # Build numeral locations (element numerals + figure labels)
     numeral_locations: dict[str, list[dict]] = {}
     for idx in sorted(sheet_bboxes):
         for bbox in sheet_bboxes[idx]:
             numeral = bbox["numeral"]
             entry = {"sheet": idx, "x": bbox["x"], "y": bbox["y"], "w": bbox["w"], "h": bbox["h"]}
             numeral_locations.setdefault(numeral, []).append(entry)
+    for idx in sorted(sheet_fig_labels):
+        for bbox in sheet_fig_labels[idx]:
+            key = f"FIG. {bbox['numeral']}"
+            entry = {"sheet": idx, "x": bbox["x"], "y": bbox["y"], "w": bbox["w"], "h": bbox["h"], "type": "figure"}
+            numeral_locations.setdefault(key, []).append(entry)
 
     return figure_map, numeral_locations
 
