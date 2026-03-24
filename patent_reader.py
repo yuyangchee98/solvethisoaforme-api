@@ -45,6 +45,54 @@ class PatentSection:
 
 
 @dataclass
+class PatentCitation:
+    publication_number: str
+    priority_date: str
+    publication_date: str
+    assignee: str
+    title: str
+    examiner_cited: bool
+
+
+@dataclass
+class NonPatentCitation:
+    title: str
+
+
+@dataclass
+class FamilyApplication:
+    application_number: str
+    representative_publication: str
+    priority_date: str
+    filing_date: str
+    title: str
+    status: str
+    expiration: str
+
+
+@dataclass
+class CountryStatus:
+    country_code: str
+    publication_number: str
+    count: int
+
+
+@dataclass
+class LegalEvent:
+    date: str
+    code: str
+    title: str
+    attributes: list[dict[str, str]] = field(default_factory=list)
+
+
+@dataclass
+class SimilarDocument:
+    publication_number: str
+    publication_date: str
+    title: str
+
+
+@dataclass
 class PatentData:
     title: str
     patent_number: str
@@ -58,6 +106,14 @@ class PatentData:
     description: list[PatentSection]
     pdf_url: str = ""
     figure_urls: list[str] = field(default_factory=list)
+    priority_date: str = ""
+    patent_citations: list[PatentCitation] = field(default_factory=list)
+    cited_by: list[PatentCitation] = field(default_factory=list)
+    non_patent_citations: list[NonPatentCitation] = field(default_factory=list)
+    family_applications: list[FamilyApplication] = field(default_factory=list)
+    country_status: list[CountryStatus] = field(default_factory=list)
+    legal_events: list[LegalEvent] = field(default_factory=list)
+    similar_documents: list[SimilarDocument] = field(default_factory=list)
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────
@@ -85,6 +141,183 @@ def _normalize_pub_number(raw: str) -> list[str]:
     return [f"{base}B2", f"{base}B1", f"{base}A1", f"{base}A"]
 
 
+def _parse_citation_rows(soup: BeautifulSoup, itemprop: str) -> list[PatentCitation]:
+    """Parse patent citation rows (backwardReferences or forwardReferencesOrig)."""
+    citations = []
+    for row in soup.find_all("tr", itemprop=itemprop):
+        pub_el = row.find("span", itemprop="publicationNumber")
+        pub_number = pub_el.get_text(strip=True) if pub_el else ""
+        if not pub_number:
+            continue
+
+        priority = ""
+        td = row.find("td", itemprop="priorityDate")
+        if td:
+            priority = td.get_text(strip=True)
+
+        pub_date = ""
+        td = row.find("td", itemprop="publicationDate")
+        if td:
+            pub_date = td.get_text(strip=True)
+
+        assignee_el = row.find("span", itemprop="assigneeOriginal")
+        assignee = assignee_el.get_text(strip=True) if assignee_el else ""
+
+        title_td = row.find("td", itemprop="title")
+        title = title_td.get_text(strip=True) if title_td else ""
+
+        examiner_el = row.find("span", itemprop="examinerCited")
+        examiner_cited = examiner_el is not None and examiner_el.get_text(strip=True) == "*"
+
+        citations.append(PatentCitation(
+            publication_number=pub_number,
+            priority_date=priority,
+            publication_date=pub_date,
+            assignee=assignee,
+            title=title,
+            examiner_cited=examiner_cited,
+        ))
+    return citations
+
+
+def _parse_non_patent_citations(soup: BeautifulSoup) -> list[NonPatentCitation]:
+    """Parse non-patent literature citation rows."""
+    citations = []
+    for row in soup.find_all("tr", itemprop="detailedNonPatentLiterature"):
+        title_el = row.find("span", itemprop="title")
+        if title_el:
+            text = title_el.get_text(separator=" ", strip=True)
+            if text:
+                citations.append(NonPatentCitation(title=text))
+    return citations
+
+
+def _parse_family_applications(soup: BeautifulSoup) -> list[FamilyApplication]:
+    """Parse patent family application rows."""
+    apps = []
+    for row in soup.find_all("tr", itemprop="applications"):
+        app_el = row.find("span", itemprop="applicationNumber")
+        app_number = app_el.get_text(strip=True) if app_el else ""
+
+        rep_el = row.find("span", itemprop="representativePublication")
+        rep_pub = rep_el.get_text(strip=True) if rep_el else ""
+
+        priority = ""
+        td = row.find("td", itemprop="priorityDate")
+        if td:
+            priority = td.get_text(strip=True)
+
+        filing = ""
+        td = row.find("td", itemprop="filingDate")
+        if td:
+            filing = td.get_text(strip=True)
+
+        title_td = row.find("td", itemprop="title")
+        title = title_td.get_text(strip=True) if title_td else ""
+
+        status_el = row.find("span", itemprop="ifiStatus")
+        status = status_el.get_text(strip=True) if status_el else ""
+
+        exp_el = row.find("span", itemprop="ifiExpiration")
+        expiration = exp_el.get_text(strip=True) if exp_el else ""
+
+        if app_number or rep_pub:
+            apps.append(FamilyApplication(
+                application_number=app_number,
+                representative_publication=rep_pub,
+                priority_date=priority,
+                filing_date=filing,
+                title=title,
+                status=status,
+                expiration=expiration,
+            ))
+    return apps
+
+
+def _parse_country_status(soup: BeautifulSoup) -> list[CountryStatus]:
+    """Parse patent family country status rows."""
+    statuses = []
+    for row in soup.find_all("tr", itemprop="countryStatus"):
+        code_el = row.find("span", itemprop="countryCode")
+        code = code_el.get_text(strip=True) if code_el else ""
+
+        num_el = row.find("span", itemprop="num")
+        count = 1
+        if num_el:
+            try:
+                count = int(num_el.get_text(strip=True))
+            except ValueError:
+                pass
+
+        pub_el = row.find("span", itemprop="representativePublication")
+        pub = pub_el.get_text(strip=True) if pub_el else ""
+
+        if code:
+            statuses.append(CountryStatus(
+                country_code=code,
+                publication_number=pub,
+                count=count,
+            ))
+    return statuses
+
+
+def _parse_legal_events(soup: BeautifulSoup) -> list[LegalEvent]:
+    """Parse patent legal event rows."""
+    events = []
+    for row in soup.find_all("tr", itemprop="legalEvents"):
+        time_el = row.find("time", itemprop="date")
+        date = time_el.get("datetime", "") if time_el else ""
+
+        code_td = row.find("td", itemprop="code")
+        code = code_td.get_text(strip=True) if code_td else ""
+
+        title_td = row.find("td", itemprop="title")
+        title = title_td.get_text(strip=True) if title_td else ""
+
+        attributes = []
+        for attr_p in row.find_all("p", itemprop="attributes"):
+            label_el = attr_p.find("strong", itemprop="label")
+            value_el = attr_p.find("span", itemprop="value")
+            label = label_el.get_text(strip=True) if label_el else ""
+            value = value_el.get_text(strip=True) if value_el else ""
+            if label or value:
+                attributes.append({"label": label, "value": value})
+
+        if date or code:
+            events.append(LegalEvent(
+                date=date,
+                code=code,
+                title=title,
+                attributes=attributes,
+            ))
+    return events
+
+
+def _parse_similar_documents(soup: BeautifulSoup, self_number: str) -> list[SimilarDocument]:
+    """Parse similar documents rows, excluding the patent itself."""
+    self_normalized = re.sub(r"[^A-Z0-9]", "", self_number.upper())
+    docs = []
+    for row in soup.find_all("tr", itemprop="similarDocuments"):
+        pub_el = row.find("span", itemprop="publicationNumber")
+        pub_number = pub_el.get_text(strip=True) if pub_el else ""
+
+        if not pub_number or re.sub(r"[^A-Z0-9]", "", pub_number.upper()) == self_normalized:
+            continue
+
+        time_el = row.find("time", itemprop="publicationDate")
+        pub_date = time_el.get("datetime", "") if time_el else ""
+
+        title_td = row.find("td", itemprop="title")
+        title = title_td.get_text(strip=True) if title_td else ""
+
+        docs.append(SimilarDocument(
+            publication_number=pub_number,
+            publication_date=pub_date,
+            title=title,
+        ))
+    return docs
+
+
 def _parse_patent_html(html: str, pub_number: str) -> PatentData:
     """Parse Google Patents HTML into structured PatentData."""
     soup = BeautifulSoup(html, "html.parser")
@@ -97,15 +330,19 @@ def _parse_patent_html(html: str, pub_number: str) -> PatentData:
     pdf_meta = soup.find("meta", {"name": "citation_pdf_url"})
     pdf_url = pdf_meta.get("content", "").strip() if pdf_meta else ""
 
-    # Dates — take the first filingDate/publicationDate <time> elements
+    # Dates — take the first filingDate/publicationDate/priorityDate <time> elements
     filing_date = ""
     pub_date = ""
+    priority_date = ""
     el = soup.find("time", itemprop="filingDate")
     if el:
         filing_date = el.get("datetime", "")
     el = soup.find("time", itemprop="publicationDate")
     if el:
         pub_date = el.get("datetime", "")
+    el = soup.find("time", itemprop="priorityDate")
+    if el:
+        priority_date = el.get("datetime", "")
 
     # Inventors — only from the first article.result (the patent itself)
     inventors: list[str] = []
@@ -190,6 +427,9 @@ def _parse_patent_html(html: str, pub_number: str) -> PatentData:
                     continue
 
                 text = claim_div.get_text(separator=" ", strip=True)
+                # Strip leading claim number — Google Patents embeds it as
+                # "1." (granted B1/B2) or "1 ." (applications A1)
+                text = re.sub(r"^\d+\s*\.\s*", "", text)
 
                 # Extract dependency from claim-ref elements
                 depends_on: int | None = None
@@ -229,6 +469,14 @@ def _parse_patent_html(html: str, pub_number: str) -> PatentData:
         description=sections,
         pdf_url=pdf_url,
         figure_urls=figure_urls,
+        priority_date=priority_date,
+        patent_citations=_parse_citation_rows(soup, "backwardReferences"),
+        cited_by=_parse_citation_rows(soup, "forwardReferencesOrig"),
+        non_patent_citations=_parse_non_patent_citations(soup),
+        family_applications=_parse_family_applications(soup),
+        country_status=_parse_country_status(soup),
+        legal_events=_parse_legal_events(soup),
+        similar_documents=_parse_similar_documents(soup, pub_number),
     )
 
 

@@ -181,6 +181,9 @@ async def _parse_and_save(
             for claim_div in claims_div.find_all("div", class_="claim", attrs={"num": True}):
                 num = claim_div["num"].lstrip("0") or "?"
                 text = claim_div.get_text(separator=" ", strip=True)
+                # Strip leading claim number — Google Patents embeds it as
+                # "1." (granted B1/B2) or "1 ." (applications A1)
+                text = re.sub(r"^\d+\s*\.\s*", "", text)
                 claim_texts.append(f"### Claim {num}\n{text}\n")
 
     # Build markdown
