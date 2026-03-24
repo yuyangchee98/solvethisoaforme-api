@@ -25,11 +25,19 @@ router = APIRouter(prefix="/patents", tags=["patents"])
 
 
 @dataclass
+class ClaimLimitation:
+    text: str
+    depth: int
+    children: list["ClaimLimitation"] = field(default_factory=list)
+
+
+@dataclass
 class PatentClaim:
     number: int
-    text: str
+    text: str  # flat text (backwards compat)
     depends_on: int | None  # None = independent
     type: str  # "independent" | "dependent"
+    limitations: list[ClaimLimitation] = field(default_factory=list)
 
 
 @dataclass
@@ -318,6 +326,44 @@ def _parse_similar_documents(soup: BeautifulSoup, self_number: str) -> list[Simi
     return docs
 
 
+def _parse_claim_limitations(claim_div: Tag) -> list[ClaimLimitation]:
+    """Parse nested claim-text divs into a limitation tree.
+
+    Google Patents encodes claim structure as nested <div class="claim-text">
+    elements. Each nesting level represents a deeper limitation (preamble →
+    body elements → sub-elements).
+    """
+    def _get_direct_text(node: Tag) -> str:
+        """Get text from a claim-text div, excluding nested claim-text children."""
+        parts = []
+        for child in node.children:
+            if isinstance(child, str):
+                parts.append(child)
+            elif isinstance(child, Tag):
+                if "claim-text" in (child.get("class") or []):
+                    continue  # skip nested claim-text
+                parts.append(child.get_text(separator=" "))
+        text = " ".join(parts).strip()
+        # Strip leading claim number ("1.", "1 .")
+        text = re.sub(r"^\d+\s*\.\s*", "", text).strip()
+        return text
+
+    def _walk(node: Tag, depth: int) -> list[ClaimLimitation]:
+        results = []
+        for child in node.children:
+            if not isinstance(child, Tag):
+                continue
+            if "claim-text" not in (child.get("class") or []):
+                continue
+            text = _get_direct_text(child)
+            children = _walk(child, depth + 1)
+            if text or children:
+                results.append(ClaimLimitation(text=text, depth=depth, children=children))
+        return results
+
+    return _walk(claim_div, 0)
+
+
 def _parse_patent_html(html: str, pub_number: str) -> PatentData:
     """Parse Google Patents HTML into structured PatentData."""
     soup = BeautifulSoup(html, "html.parser")
@@ -413,7 +459,7 @@ def _parse_patent_html(html: str, pub_number: str) -> PatentData:
                 if current_paras:
                     sections.append(PatentSection(heading=current_heading, paragraphs=current_paras))
 
-    # Claims — parse with dependency info
+    # Claims — parse with dependency info and limitation tree
     claims: list[PatentClaim] = []
     claims_section = soup.find("section", itemprop="claims")
     if claims_section:
@@ -441,11 +487,15 @@ def _parse_patent_html(html: str, pub_number: str) -> PatentData:
                         depends_on = int(m.group(1))
                         break
 
+                # Parse nested claim-text divs into limitation tree
+                limitations = _parse_claim_limitations(claim_div)
+
                 claims.append(PatentClaim(
                     number=num,
                     text=text,
                     depends_on=depends_on,
                     type="dependent" if depends_on is not None else "independent",
+                    limitations=limitations,
                 ))
 
     # Figures — extract full-resolution image URLs from <meta itemprop="full"> elements
