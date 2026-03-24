@@ -736,6 +736,174 @@ async def get_reference_numerals(publication_number: str):
     )
 
 
+# ── Claim element extraction ────────────────────────────────────────────
+
+
+_CLAIM_ELEMENT_SKIP = frozenset(
+    "claim claims step steps method system apparatus device "
+    "embodiment embodiments example examples means way "
+    "communication service services use case".split()
+)
+
+
+def _extract_claim_elements(data: PatentData) -> dict:
+    """Extract claim element introductions and back-references with group IDs.
+
+    For each claim, identifies noun phrases introduced with "a"/"an" (or bare)
+    and their back-references with "the"/"said". Groups matching introductions
+    and references so the frontend can color-code them.
+
+    Walks dependency chains so dependent claims inherit parent introductions.
+    """
+    claims_map = {c.number: c for c in data.claims}
+
+    # Pass 1: extract NPs per claim and build introduction maps
+    claim_nps: dict[int, list[dict]] = {}
+    claim_intros: dict[int, dict[str, int]] = {}
+    group_counter = 0
+
+    for claim in data.claims:
+        doc = spacy_nlp(claim.text)
+        nps = []
+
+        for chunk in doc.noun_chunks:
+            det = None
+            det_token = None
+            for tok in chunk:
+                if tok.dep_ == "det":
+                    det = tok.text.lower()
+                    det_token = tok
+                    break
+
+            if det_token:
+                np_start_offset = det_token.idx + len(det_token.text_with_ws) - chunk.start_char
+                np_text = chunk.text[np_start_offset:].strip().lower()
+            else:
+                np_text = chunk.text.strip().lower()
+
+            if not np_text:
+                continue
+
+            if det in ("a", "an"):
+                role = "introduction"
+            elif det in ("the", "said"):
+                role = "reference"
+            elif det is None:
+                role = "bare"
+            else:
+                continue
+
+            # Skip structural/noise words for bare NPs
+            if role == "bare" and np_text in _CLAIM_ELEMENT_SKIP:
+                continue
+
+            nps.append({
+                "start": chunk.start_char,
+                "end": chunk.end_char,
+                "np_text": np_text,
+                "role": role,
+            })
+
+        claim_nps[claim.number] = nps
+
+        intros: dict[str, int] = {}
+        for np in nps:
+            if np["role"] in ("introduction", "bare") and np["np_text"] not in intros:
+                intros[np["np_text"]] = group_counter
+                group_counter += 1
+        claim_intros[claim.number] = intros
+
+    # Pass 2: collect inherited introductions via dependency chains
+    inherited_cache: dict[int, dict[str, int]] = {}
+
+    def _collect_intros(claim_num: int, visited: set[int] | None = None) -> dict[str, int]:
+        if claim_num in inherited_cache:
+            return inherited_cache[claim_num]
+        if visited is None:
+            visited = set()
+        if claim_num in visited:
+            return {}
+        visited.add(claim_num)
+        claim = claims_map.get(claim_num)
+        if not claim:
+            return {}
+        result = dict(claim_intros.get(claim_num, {}))
+        if claim.depends_on is not None:
+            parent = _collect_intros(claim.depends_on, visited)
+            for np_text, gid in parent.items():
+                if np_text not in result:
+                    result[np_text] = gid
+        inherited_cache[claim_num] = result
+        return result
+
+    # Pass 3: build output spans with group IDs
+    claim_elements = []
+    all_groups: dict[int, dict] = {}
+
+    for claim in data.claims:
+        all_intros = _collect_intros(claim.number)
+        spans = []
+
+        for np in claim_nps[claim.number]:
+            if np["role"] in ("introduction", "bare"):
+                gid = claim_intros[claim.number].get(np["np_text"])
+                if gid is not None:
+                    spans.append({
+                        "start": np["start"],
+                        "end": np["end"],
+                        "group_id": gid,
+                        "np_text": np["np_text"],
+                        "role": np["role"],
+                    })
+                    if gid not in all_groups:
+                        all_groups[gid] = {
+                            "group_id": gid,
+                            "np_text": np["np_text"],
+                            "introduced_in": claim.number,
+                        }
+            elif np["role"] == "reference":
+                gid = all_intros.get(np["np_text"])
+                if gid is not None:
+                    spans.append({
+                        "start": np["start"],
+                        "end": np["end"],
+                        "group_id": gid,
+                        "np_text": np["np_text"],
+                        "role": "reference",
+                    })
+
+        claim_elements.append({
+            "claim_number": claim.number,
+            "spans": spans,
+        })
+
+    groups = sorted(all_groups.values(), key=lambda g: g["group_id"])
+    return {"claim_elements": claim_elements, "groups": groups}
+
+
+@router.get("/{publication_number}/claim-elements")
+async def get_claim_elements(publication_number: str):
+    """Extract claim element introductions and references with group IDs."""
+    candidates = _normalize_pub_number(publication_number)
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+        for candidate in candidates:
+            url = f"https://patents.google.com/patent/{candidate}/en"
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = _parse_patent_html(resp.text, candidate)
+                    return _extract_claim_elements(data)
+            except httpx.HTTPError as exc:
+                logger.warning("Failed to fetch %s: %s", candidate, exc)
+                continue
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Patent not found. Tried: {', '.join(candidates)}",
+    )
+
+
 # ── Figure map via Google Vision OCR ──────────────────────────────────────
 
 _FIG_PATTERN = re.compile(r"Fig(?:ure)?\s*[.,;:]?\s*(\d+(?:[a-zA-Z]|-\d+)?)", re.IGNORECASE)
