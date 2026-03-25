@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup, Tag
 from fastapi import APIRouter, HTTPException
 
 from core.nlp_models import nlp as spacy_nlp
+from patent_cache import get_cached, set_cached
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,54 @@ class PatentData:
     country_status: list[CountryStatus] = field(default_factory=list)
     legal_events: list[LegalEvent] = field(default_factory=list)
     similar_documents: list[SimilarDocument] = field(default_factory=list)
+
+
+def _patent_data_from_dict(d: dict) -> PatentData:
+    """Reconstruct a PatentData from a dict (e.g. from JSON cache)."""
+    def _limitation(lim: dict) -> ClaimLimitation:
+        return ClaimLimitation(
+            text=lim["text"],
+            depth=lim["depth"],
+            children=[_limitation(c) for c in lim.get("children", [])],
+        )
+
+    return PatentData(
+        title=d["title"],
+        patent_number=d["patent_number"],
+        filing_date=d["filing_date"],
+        publication_date=d["publication_date"],
+        inventors=d["inventors"],
+        assignee=d["assignee"],
+        classifications=d["classifications"],
+        abstract=d["abstract"],
+        claims=[
+            PatentClaim(
+                number=c["number"],
+                text=c["text"],
+                depends_on=c["depends_on"],
+                type=c["type"],
+                limitations=[_limitation(lim) for lim in c.get("limitations", [])],
+            )
+            for c in d["claims"]
+        ],
+        description=[
+            PatentSection(
+                heading=s["heading"],
+                paragraphs=[PatentParagraph(text=p["text"], number=p.get("number")) for p in s["paragraphs"]],
+            )
+            for s in d["description"]
+        ],
+        pdf_url=d.get("pdf_url", ""),
+        figure_urls=d.get("figure_urls", []),
+        priority_date=d.get("priority_date", ""),
+        patent_citations=[PatentCitation(**c) for c in d.get("patent_citations", [])],
+        cited_by=[PatentCitation(**c) for c in d.get("cited_by", [])],
+        non_patent_citations=[NonPatentCitation(**c) for c in d.get("non_patent_citations", [])],
+        family_applications=[FamilyApplication(**c) for c in d.get("family_applications", [])],
+        country_status=[CountryStatus(**c) for c in d.get("country_status", [])],
+        legal_events=[LegalEvent(**e) for e in d.get("legal_events", [])],
+        similar_documents=[SimilarDocument(**s) for s in d.get("similar_documents", [])],
+    )
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────
@@ -540,12 +589,13 @@ _locks_lock = asyncio.Lock()
 async def _get_patent_data(publication_number: str) -> PatentData:
     """Fetch and parse a patent, returning a cached result if available.
 
-    Uses per-patent locks so concurrent requests for the same patent
-    only trigger one Google Patents fetch.
+    L1 = in-memory dict (hot path, lost on restart).
+    L2 = SQLite patent_cache table (survives restarts).
+    L3 = Google Patents fetch.
     """
     candidates = _normalize_pub_number(publication_number)
 
-    # Check cache before acquiring any lock
+    # L1: in-memory check before acquiring any lock
     for candidate in candidates:
         if candidate in _patent_cache:
             return _patent_cache[candidate]
@@ -557,11 +607,20 @@ async def _get_patent_data(publication_number: str) -> PatentData:
         lock = _patent_locks[cache_key]
 
     async with lock:
-        # Double-check after acquiring lock
+        # Double-check L1 after acquiring lock
         for candidate in candidates:
             if candidate in _patent_cache:
                 return _patent_cache[candidate]
 
+        # L2: SQLite persistent cache
+        for candidate in candidates:
+            cached = await get_cached(candidate, "patent")
+            if cached:
+                data = _patent_data_from_dict(cached)
+                _patent_cache[candidate] = data
+                return data
+
+        # L3: fetch from Google Patents
         async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
             for candidate in candidates:
                 url = f"https://patents.google.com/patent/{candidate}/en"
@@ -570,6 +629,7 @@ async def _get_patent_data(publication_number: str) -> PatentData:
                     if resp.status_code == 200:
                         data = _parse_patent_html(resp.text, candidate)
                         _patent_cache[candidate] = data
+                        await set_cached(candidate, "patent", asdict(data))
                         return data
                 except httpx.HTTPError as exc:
                     logger.warning("Failed to fetch %s: %s", candidate, exc)
@@ -796,7 +856,13 @@ def _extract_reference_numerals(data: PatentData) -> dict:
 async def get_reference_numerals(publication_number: str):
     """Extract reference numeral → label mappings and highlight positions from a patent."""
     data = await _get_patent_data(publication_number)
-    return _extract_reference_numerals(data)
+    key = data.patent_number
+    cached = await get_cached(key, "reference_numerals")
+    if cached:
+        return cached
+    result = _extract_reference_numerals(data)
+    await set_cached(key, "reference_numerals", result)
+    return result
 
 
 # ── Claim element extraction ────────────────────────────────────────────
@@ -948,7 +1014,13 @@ def _extract_claim_elements(data: PatentData) -> dict:
 async def get_claim_elements(publication_number: str):
     """Extract claim element introductions and references with group IDs."""
     data = await _get_patent_data(publication_number)
-    return _extract_claim_elements(data)
+    key = data.patent_number
+    cached = await get_cached(key, "claim_elements")
+    if cached:
+        return cached
+    result = _extract_claim_elements(data)
+    await set_cached(key, "claim_elements", result)
+    return result
 
 
 # ── Figure map via Google Vision OCR ──────────────────────────────────────
@@ -1150,12 +1222,35 @@ async def _build_figure_map(
     return figure_map, numeral_locations
 
 
+_figure_map_locks: dict[str, asyncio.Lock] = {}
+
+
 @router.get("/{publication_number}/figure-map")
 async def get_figure_map(publication_number: str):
     """OCR patent drawing sheets to map figure numbers to drawing sheet indices."""
     data = await _get_patent_data(publication_number)
-    figure_map, numeral_locations = await _build_figure_map(data.figure_urls)
-    return {
-        "figure_map": figure_map,
-        "numeral_locations": numeral_locations,
-    }
+    key = data.patent_number
+
+    # Fast path: persistent cache
+    cached = await get_cached(key, "figure_map")
+    if cached:
+        return cached
+
+    # Slow path with lock to prevent duplicate OCR runs
+    async with _locks_lock:
+        if key not in _figure_map_locks:
+            _figure_map_locks[key] = asyncio.Lock()
+        lock = _figure_map_locks[key]
+
+    async with lock:
+        # Double-check after acquiring lock
+        cached = await get_cached(key, "figure_map")
+        if cached:
+            return cached
+        figure_map, numeral_locations = await _build_figure_map(data.figure_urls)
+        result = {
+            "figure_map": figure_map,
+            "numeral_locations": numeral_locations,
+        }
+        await set_cached(key, "figure_map", result)
+        return result
