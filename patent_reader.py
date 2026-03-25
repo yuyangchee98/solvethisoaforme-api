@@ -530,33 +530,65 @@ def _parse_patent_html(html: str, pub_number: str) -> PatentData:
     )
 
 
-# ── Endpoint ──────────────────────────────────────────────────────────────
+# ── Shared fetch + in-memory cache ────────────────────────────────────────
+
+_patent_cache: dict[str, PatentData] = {}
+_patent_locks: dict[str, asyncio.Lock] = {}
+_locks_lock = asyncio.Lock()
+
+
+async def _get_patent_data(publication_number: str) -> PatentData:
+    """Fetch and parse a patent, returning a cached result if available.
+
+    Uses per-patent locks so concurrent requests for the same patent
+    only trigger one Google Patents fetch.
+    """
+    candidates = _normalize_pub_number(publication_number)
+
+    # Check cache before acquiring any lock
+    for candidate in candidates:
+        if candidate in _patent_cache:
+            return _patent_cache[candidate]
+
+    cache_key = candidates[0]
+    async with _locks_lock:
+        if cache_key not in _patent_locks:
+            _patent_locks[cache_key] = asyncio.Lock()
+        lock = _patent_locks[cache_key]
+
+    async with lock:
+        # Double-check after acquiring lock
+        for candidate in candidates:
+            if candidate in _patent_cache:
+                return _patent_cache[candidate]
+
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            for candidate in candidates:
+                url = f"https://patents.google.com/patent/{candidate}/en"
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        data = _parse_patent_html(resp.text, candidate)
+                        _patent_cache[candidate] = data
+                        return data
+                except httpx.HTTPError as exc:
+                    logger.warning("Failed to fetch %s: %s", candidate, exc)
+                    continue
+
+        raise HTTPException(
+            status_code=404,
+            detail=f"Patent not found. Tried: {', '.join(candidates)}",
+        )
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────
 
 
 @router.get("/{publication_number}")
 async def get_patent(publication_number: str):
-    """Fetch and return structured patent data from Google Patents.
-
-    Accepts formats like US11423567B2, US-11423567-B2, US 11,423,567 B2, etc.
-    """
-    candidates = _normalize_pub_number(publication_number)
-
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-        for candidate in candidates:
-            url = f"https://patents.google.com/patent/{candidate}/en"
-            try:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    data = _parse_patent_html(resp.text, candidate)
-                    return asdict(data)
-            except httpx.HTTPError as exc:
-                logger.warning("Failed to fetch %s: %s", candidate, exc)
-                continue
-
-    raise HTTPException(
-        status_code=404,
-        detail=f"Patent not found. Tried: {', '.join(candidates)}",
-    )
+    """Fetch and return structured patent data from Google Patents."""
+    data = await _get_patent_data(publication_number)
+    return asdict(data)
 
 
 # ── Reference numerals ───────────────────────────────────────────────────
@@ -762,28 +794,9 @@ def _extract_reference_numerals(data: PatentData) -> dict:
 
 @router.get("/{publication_number}/reference-numerals")
 async def get_reference_numerals(publication_number: str):
-    """Extract reference numeral → label mappings and highlight positions from a patent.
-
-    Returns {numerals: [...], highlights: {abstract: [...], description: [[...]], claims: [[...]]}}.
-    """
-    candidates = _normalize_pub_number(publication_number)
-
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-        for candidate in candidates:
-            url = f"https://patents.google.com/patent/{candidate}/en"
-            try:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    data = _parse_patent_html(resp.text, candidate)
-                    return _extract_reference_numerals(data)
-            except httpx.HTTPError as exc:
-                logger.warning("Failed to fetch %s: %s", candidate, exc)
-                continue
-
-    raise HTTPException(
-        status_code=404,
-        detail=f"Patent not found. Tried: {', '.join(candidates)}",
-    )
+    """Extract reference numeral → label mappings and highlight positions from a patent."""
+    data = await _get_patent_data(publication_number)
+    return _extract_reference_numerals(data)
 
 
 # ── Claim element extraction ────────────────────────────────────────────
@@ -934,24 +947,8 @@ def _extract_claim_elements(data: PatentData) -> dict:
 @router.get("/{publication_number}/claim-elements")
 async def get_claim_elements(publication_number: str):
     """Extract claim element introductions and references with group IDs."""
-    candidates = _normalize_pub_number(publication_number)
-
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-        for candidate in candidates:
-            url = f"https://patents.google.com/patent/{candidate}/en"
-            try:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    data = _parse_patent_html(resp.text, candidate)
-                    return _extract_claim_elements(data)
-            except httpx.HTTPError as exc:
-                logger.warning("Failed to fetch %s: %s", candidate, exc)
-                continue
-
-    raise HTTPException(
-        status_code=404,
-        detail=f"Patent not found. Tried: {', '.join(candidates)}",
-    )
+    data = await _get_patent_data(publication_number)
+    return _extract_claim_elements(data)
 
 
 # ── Figure map via Google Vision OCR ──────────────────────────────────────
@@ -1155,30 +1152,10 @@ async def _build_figure_map(
 
 @router.get("/{publication_number}/figure-map")
 async def get_figure_map(publication_number: str):
-    """OCR patent drawing sheets to map figure numbers to drawing sheet indices.
-
-    Returns {"figure_map": {"1": 1, "2": 2, ...}} where keys are figure numbers
-    and values are indices into the figure_urls array.
-    """
-    candidates = _normalize_pub_number(publication_number)
-
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-        for candidate in candidates:
-            url = f"https://patents.google.com/patent/{candidate}/en"
-            try:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    data = _parse_patent_html(resp.text, candidate)
-                    figure_map, numeral_locations = await _build_figure_map(data.figure_urls)
-                    return {
-                        "figure_map": figure_map,
-                        "numeral_locations": numeral_locations,
-                    }
-            except httpx.HTTPError as exc:
-                logger.warning("Failed to fetch %s: %s", candidate, exc)
-                continue
-
-    raise HTTPException(
-        status_code=404,
-        detail=f"Patent not found. Tried: {', '.join(candidates)}",
-    )
+    """OCR patent drawing sheets to map figure numbers to drawing sheet indices."""
+    data = await _get_patent_data(publication_number)
+    figure_map, numeral_locations = await _build_figure_map(data.figure_urls)
+    return {
+        "figure_map": figure_map,
+        "numeral_locations": numeral_locations,
+    }
