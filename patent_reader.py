@@ -928,20 +928,6 @@ async def _get_patent_data(publication_number: str) -> PatentData:
                     resp = await client.get(url)
                     if resp.status_code == 200:
                         data = _parse_patent_html(resp.text, candidate)
-                        # Col/line extraction for patents without paragraph numbers
-                        all_paras = [p for s in data.description for p in s.paragraphs]
-                        if all_paras and all(p.number is None for p in all_paras):
-                            # Use /pdfs/ URL (original patent) rather than citation_pdf_url
-                            # (which may include reexam certificates that change page layout)
-                            bare_number = re.sub(r"[A-Z]$", "", candidate.replace("US", ""))
-                            col_line_pdf_url = f"https://patentimages.storage.googleapis.com/pdfs/US{bare_number}.pdf"
-                            try:
-                                pdf_resp = await client.get(col_line_pdf_url)
-                                if pdf_resp.status_code == 200:
-                                    _save_pdf(candidate, pdf_resp.content)
-                                    _apply_col_line_locations(data, pdf_resp.content)
-                            except httpx.HTTPError:
-                                pass  # non-fatal
                         _patent_cache[candidate] = data
                         await set_cached(candidate, "patent", asdict(data))
                         return data
@@ -962,7 +948,65 @@ async def _get_patent_data(publication_number: str) -> PatentData:
 async def get_patent(publication_number: str):
     """Fetch and return structured patent data from Google Patents."""
     data = await _get_patent_data(publication_number)
-    return asdict(data)
+    result = asdict(data)
+    # Tell the frontend whether col/line data is available or needs fetching
+    all_paras = [p for s in data.description for p in s.paragraphs]
+    result["needs_col_lines"] = bool(all_paras) and all(p.number is None for p in all_paras)
+    return result
+
+
+@router.get("/{publication_number}/col-lines")
+async def get_col_lines(publication_number: str):
+    """Fetch col/line locations for patents without paragraph numbers.
+
+    Downloads the original patent PDF and maps each description paragraph
+    to its column/line position.  Returns the enriched description sections
+    (same shape as PatentData.description) so the frontend can patch them in.
+    """
+    data = await _get_patent_data(publication_number)
+    key = data.patent_number
+
+    # Check if this patent even needs col/line enrichment
+    all_paras = [p for s in data.description for p in s.paragraphs]
+    if not all_paras or not all(p.number is None for p in all_paras):
+        return {"description": None}
+
+    # Already enriched (e.g. cached from a previous call)?
+    if all_paras[0].col is not None:
+        return {"description": [asdict(s) for s in data.description]}
+
+    # Check persistent cache
+    cached = await get_cached(key, "col_lines")
+    if cached:
+        # Patch the in-memory data so subsequent calls are instant
+        enriched = _patent_data_from_dict({**asdict(data), "description": cached["description"]})
+        for s_new, s_old in zip(enriched.description, data.description):
+            for p_new, p_old in zip(s_new.paragraphs, s_old.paragraphs):
+                p_old.col = p_new.col
+                p_old.line = p_new.line
+                p_old.end_col = p_new.end_col
+                p_old.end_line = p_new.end_line
+                p_old.line_breaks = p_new.line_breaks
+        return cached
+
+    # Fetch PDF and extract col/line data
+    bare_number = re.sub(r"[A-Z]$", "", key.replace("US", ""))
+    col_line_pdf_url = f"https://patentimages.storage.googleapis.com/pdfs/US{bare_number}.pdf"
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+        try:
+            pdf_resp = await client.get(col_line_pdf_url)
+            if pdf_resp.status_code == 200:
+                _save_pdf(key, pdf_resp.content)
+                _apply_col_line_locations(data, pdf_resp.content)
+                result = {"description": [asdict(s) for s in data.description]}
+                await set_cached(key, "col_lines", result)
+                # Update the main patent cache too
+                await set_cached(key, "patent", asdict(data))
+                return result
+        except httpx.HTTPError:
+            pass
+
+    return {"description": None}
 
 
 # ── PDF cache ────────────────────────────────────────────────────────────
