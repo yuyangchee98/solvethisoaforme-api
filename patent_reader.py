@@ -12,8 +12,10 @@ from difflib import SequenceMatcher
 from collections import Counter, defaultdict
 
 import httpx
+from pathlib import Path
 from bs4 import BeautifulSoup, Tag
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 from core.nlp_models import nlp as spacy_nlp
 from patent_cache import get_cached, set_cached
@@ -704,7 +706,11 @@ def _extract_pdf_lines(pdf_bytes: bytes) -> list[dict]:
                 line_est = round(upper["line_num"] - (upper["y"] - y) * rate)
 
             if line_est is not None:
-                all_lines.append({"col": col_num, "line": line_est, "text": tl["text"]})
+                all_lines.append({
+                    "col": col_num, "line": line_est, "text": tl["text"],
+                    "page": pg_idx + 1, "y": round(y, 1),
+                    "gutter_x": round(gutter_x, 1), "page_width": round(width, 1),
+                })
 
     all_lines.sort(key=lambda x: (x["col"], x["line"]))
     return all_lines
@@ -825,6 +831,12 @@ def _compute_line_breaks(
         col = pdf_line["col"]
         ln = pdf_line["line"]
 
+        entry = {
+            "offset": 0, "col": col, "line": ln,
+            "page": pdf_line.get("page"), "y": pdf_line.get("y"),
+            "gutter_x": pdf_line.get("gutter_x"), "page_width": pdf_line.get("page_width"),
+        }
+
         found = False
         for chunk_len in (20, 12, 8, 5):
             chunk = raw[:chunk_len].strip().lower()
@@ -832,7 +844,7 @@ def _compute_line_breaks(
                 continue
             idx = para_lower.find(chunk, search_pos)
             if idx != -1:
-                line_breaks.append({"offset": idx, "col": col, "line": ln})
+                entry["offset"] = idx
                 search_pos = idx + 1
                 found = True
                 break
@@ -840,10 +852,9 @@ def _compute_line_breaks(
         if not found:
             if line_breaks:
                 avg_gap = line_breaks[-1]["offset"] // max(1, len(line_breaks))
-                est = min(search_pos + avg_gap, len(para_text) - 1)
-                line_breaks.append({"offset": est, "col": col, "line": ln})
-            else:
-                line_breaks.append({"offset": 0, "col": col, "line": ln})
+                entry["offset"] = min(search_pos + avg_gap, len(para_text) - 1)
+
+        line_breaks.append(entry)
 
     return line_breaks
 
@@ -927,6 +938,7 @@ async def _get_patent_data(publication_number: str) -> PatentData:
                             try:
                                 pdf_resp = await client.get(col_line_pdf_url)
                                 if pdf_resp.status_code == 200:
+                                    _save_pdf(candidate, pdf_resp.content)
                                     _apply_col_line_locations(data, pdf_resp.content)
                             except httpx.HTTPError:
                                 pass  # non-fatal
@@ -951,6 +963,54 @@ async def get_patent(publication_number: str):
     """Fetch and return structured patent data from Google Patents."""
     data = await _get_patent_data(publication_number)
     return asdict(data)
+
+
+# ── PDF cache ────────────────────────────────────────────────────────────
+
+_PDF_CACHE_DIR = Path(__file__).parent / "data" / "pdfs"
+_PDF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _pdf_cache_path(patent_number: str) -> Path:
+    """Return the on-disk path for a cached patent PDF."""
+    safe = re.sub(r"[^A-Za-z0-9]", "", patent_number)
+    return _PDF_CACHE_DIR / f"{safe}.pdf"
+
+
+def _save_pdf(patent_number: str, content: bytes) -> None:
+    _pdf_cache_path(patent_number).write_bytes(content)
+
+
+def _load_pdf(patent_number: str) -> bytes | None:
+    path = _pdf_cache_path(patent_number)
+    return path.read_bytes() if path.exists() else None
+
+
+@router.get("/{publication_number}/pdf")
+async def get_patent_pdf(publication_number: str):
+    """Serve the cached patent PDF (fetches from Google if not cached)."""
+    candidates = _normalize_pub_number(publication_number)
+    for candidate in candidates:
+        path = _pdf_cache_path(candidate)
+        if path.exists():
+            return FileResponse(path, media_type="application/pdf")
+
+    # Not cached — fetch it
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+        for candidate in candidates:
+            bare = re.sub(r"[A-Z]$", "", candidate.replace("US", ""))
+            url = f"https://patentimages.storage.googleapis.com/pdfs/US{bare}.pdf"
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    _save_pdf(candidate, resp.content)
+                    return FileResponse(
+                        _pdf_cache_path(candidate), media_type="application/pdf"
+                    )
+            except httpx.HTTPError:
+                continue
+
+    raise HTTPException(status_code=404, detail="PDF not found")
 
 
 # ── Reference numerals ───────────────────────────────────────────────────
