@@ -7,6 +7,7 @@ import os
 import re
 import struct
 from dataclasses import dataclass, field, asdict
+from difflib import SequenceMatcher
 
 from collections import Counter, defaultdict
 
@@ -45,6 +46,10 @@ class PatentClaim:
 class PatentParagraph:
     text: str
     number: str | None = None  # e.g. "0001", absent for some patents
+    col: int | None = None      # column number (older patents without para numbers)
+    line: int | None = None     # start line number
+    end_col: int | None = None  # end column number
+    end_line: int | None = None # end line number
 
 
 @dataclass
@@ -156,7 +161,17 @@ def _patent_data_from_dict(d: dict) -> PatentData:
         description=[
             PatentSection(
                 heading=s["heading"],
-                paragraphs=[PatentParagraph(text=p["text"], number=p.get("number")) for p in s["paragraphs"]],
+                paragraphs=[
+                    PatentParagraph(
+                        text=p["text"],
+                        number=p.get("number"),
+                        col=p.get("col"),
+                        line=p.get("line"),
+                        end_col=p.get("end_col"),
+                        end_line=p.get("end_line"),
+                    )
+                    for p in s["paragraphs"]
+                ],
             )
             for s in d["description"]
         ],
@@ -579,6 +594,228 @@ def _parse_patent_html(html: str, pub_number: str) -> PatentData:
     )
 
 
+# ── Col/line extraction for older patents ─────────────────────────────────
+
+
+def _col_line_normalize(text: str) -> str:
+    """Normalize text for fuzzy comparison between HTML and PDF text."""
+    text = text.lower()
+    text = re.sub(r"\s+", " ", text)
+    text = text.replace("?", "")  # PDF ligature placeholder
+    return text.strip()
+
+
+def _extract_pdf_lines(pdf_bytes: bytes) -> list[dict]:
+    """Extract all text lines with col/line numbers from a patent PDF."""
+    import pymupdf
+
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    all_lines = []
+
+    for pg_idx in range(len(doc)):
+        page = doc[pg_idx]
+        text = page.get_text()
+
+        if "Sheet" in text and " of " in text:
+            continue
+
+        data = page.get_text("dict")
+        width = page.rect.width
+
+        text_lines = []
+        for block in data["blocks"]:
+            if block["type"] != 0:
+                continue
+            for line in block["lines"]:
+                full_text = "".join(s["text"] for s in line["spans"]).strip()
+                if not full_text:
+                    continue
+                bbox = line["bbox"]
+                avg_size = sum(s["size"] for s in line["spans"]) / len(line["spans"])
+                text_lines.append({
+                    "x0": bbox[0], "y0": bbox[1],
+                    "x1": bbox[2], "y1": bbox[3],
+                    "text": full_text, "size": avg_size,
+                })
+
+        if not text_lines:
+            continue
+
+        # Find gutter line markers (multiples of 5, small font, mid-page x)
+        candidate_markers = []
+        marker_indices = set()
+        for i, tl in enumerate(text_lines):
+            t = tl["text"].replace(",", "").strip()
+            if t.isdigit():
+                num = int(t)
+                if 5 <= num <= 70 and num % 5 == 0:
+                    if tl["size"] < 8 and (width * 0.35 < tl["x0"] < width * 0.65):
+                        candidate_markers.append({"line_num": num, "x": tl["x0"], "y": tl["y0"]})
+                        marker_indices.add(i)
+
+        if not candidate_markers:
+            continue
+
+        gutter_x = sum(m["x"] for m in candidate_markers) / len(candidate_markers)
+        markers_sorted = sorted(candidate_markers, key=lambda m: m["y"])
+
+        # Detect column numbers from header
+        col1_num = None
+        col2_num = None
+        for tl in text_lines:
+            if tl["y0"] < 80 and tl["text"].strip().isdigit():
+                num = int(tl["text"].strip())
+                if num < 30:
+                    if tl["x0"] < gutter_x:
+                        col1_num = num
+                    else:
+                        col2_num = num
+
+        # Assign lines to columns with interpolated line numbers
+        for i, tl in enumerate(text_lines):
+            if i in marker_indices or tl["y0"] < 75:
+                continue
+
+            col_num = col1_num if tl["x0"] < gutter_x else col2_num
+            if col_num is None:
+                continue
+
+            y = tl["y0"]
+            lower = upper = None
+            for m in markers_sorted:
+                if m["y"] <= y:
+                    lower = m
+                elif upper is None:
+                    upper = m
+
+            line_est = None
+            if lower and upper:
+                frac = (y - lower["y"]) / (upper["y"] - lower["y"])
+                line_est = round(lower["line_num"] + frac * (upper["line_num"] - lower["line_num"]))
+            elif lower and len(markers_sorted) >= 2:
+                m1, m2 = markers_sorted[-2], markers_sorted[-1]
+                rate = (m2["line_num"] - m1["line_num"]) / (m2["y"] - m1["y"])
+                line_est = round(lower["line_num"] + (y - lower["y"]) * rate)
+            elif upper and len(markers_sorted) >= 2:
+                m1, m2 = markers_sorted[0], markers_sorted[1]
+                rate = (m2["line_num"] - m1["line_num"]) / (m2["y"] - m1["y"])
+                line_est = round(upper["line_num"] - (upper["y"] - y) * rate)
+
+            if line_est is not None:
+                all_lines.append({"col": col_num, "line": line_est, "text": tl["text"]})
+
+    all_lines.sort(key=lambda x: (x["col"], x["line"]))
+    return all_lines
+
+
+def _find_col_line_match(
+    para_text: str,
+    pdf_lines: list[dict],
+    search_from: int = 0,
+    min_ratio: float = 0.5,
+) -> tuple[dict | None, int]:
+    """Find the col/line range in pdf_lines that best matches a paragraph.
+
+    Uses sequential cursor + tail-similarity end detection + lookahead.
+    Returns (match_dict, next_search_from).
+    """
+    para_norm = _col_line_normalize(para_text)
+    if len(para_norm) < 10:
+        return None, search_from
+
+    # Find START — match first ~60 chars
+    search_start = para_norm[:60]
+    best_start_idx = None
+    best_start_score = 0.0
+
+    for i in range(search_from, len(pdf_lines)):
+        pl_norm = _col_line_normalize(pdf_lines[i]["text"])
+        compare_len = min(len(search_start), len(pl_norm))
+        if compare_len < 5:
+            continue
+        ratio = SequenceMatcher(None, search_start[:compare_len], pl_norm[:compare_len]).ratio()
+        if ratio > best_start_score and ratio >= min_ratio:
+            best_start_score = ratio
+            best_start_idx = i
+
+    if best_start_idx is None:
+        return None, search_from
+
+    # Find END — accumulate lines, check tail similarity
+    para_tail = para_norm[-50:]
+    concat = _col_line_normalize(pdf_lines[best_start_idx]["text"])
+    end_idx = best_start_idx
+    best_end_idx = best_start_idx
+    best_tail_score = 0.0
+
+    est_lines = max(2, len(para_norm) // 40)
+    max_scan = best_start_idx + est_lines + 15
+
+    for j in range(best_start_idx + 1, min(max_scan, len(pdf_lines))):
+        next_norm = _col_line_normalize(pdf_lines[j]["text"])
+
+        if pdf_lines[j]["col"] != pdf_lines[j - 1]["col"]:
+            if best_tail_score > 0.7:
+                break
+            # Paragraph spans columns — keep going
+
+        concat += " " + next_norm
+        end_idx = j
+
+        concat_tail = concat[-50:]
+        tail_score = SequenceMatcher(None, para_tail, concat_tail).ratio()
+
+        if tail_score > best_tail_score:
+            best_tail_score = tail_score
+            best_end_idx = j
+
+        if tail_score > 0.7 and len(concat) >= len(para_norm) * 0.7:
+            break
+
+        if len(concat) > len(para_norm) * 1.5:
+            break
+
+    # Lookahead: catch orphaned trailing words (e.g., "detail." alone on its own line)
+    for k in range(best_end_idx + 1, min(best_end_idx + 3, max_scan, len(pdf_lines))):
+        peek_norm = _col_line_normalize(pdf_lines[k]["text"])
+        peek_concat = concat + " " + peek_norm if k > end_idx else \
+            " ".join(_col_line_normalize(pdf_lines[m]["text"]) for m in range(best_start_idx, k + 1))
+        peek_tail = peek_concat[-50:]
+        peek_score = SequenceMatcher(None, para_tail, peek_tail).ratio()
+        if peek_score > best_tail_score:
+            best_tail_score = peek_score
+            best_end_idx = k
+            concat = peek_concat
+        else:
+            break
+
+    start_line = pdf_lines[best_start_idx]
+    end_line = pdf_lines[best_end_idx]
+
+    return {
+        "start_col": start_line["col"],
+        "start_line": start_line["line"],
+        "end_col": end_line["col"],
+        "end_line": end_line["line"],
+    }, best_end_idx + 1
+
+
+def _apply_col_line_locations(data: PatentData, pdf_bytes: bytes) -> None:
+    """Assign col/line locations to description paragraphs using PDF extraction."""
+    pdf_lines = _extract_pdf_lines(pdf_bytes)
+    if not pdf_lines:
+        return
+    cursor = 0
+    for section in data.description:
+        for para in section.paragraphs:
+            match, cursor = _find_col_line_match(para.text, pdf_lines, search_from=cursor)
+            if match:
+                para.col = match["start_col"]
+                para.line = match["start_line"]
+                para.end_col = match["end_col"]
+                para.end_line = match["end_line"]
+
+
 # ── Shared fetch + in-memory cache ────────────────────────────────────────
 
 _patent_cache: dict[str, PatentData] = {}
@@ -628,6 +865,19 @@ async def _get_patent_data(publication_number: str) -> PatentData:
                     resp = await client.get(url)
                     if resp.status_code == 200:
                         data = _parse_patent_html(resp.text, candidate)
+                        # Col/line extraction for patents without paragraph numbers
+                        all_paras = [p for s in data.description for p in s.paragraphs]
+                        if all_paras and all(p.number is None for p in all_paras):
+                            # Use /pdfs/ URL (original patent) rather than citation_pdf_url
+                            # (which may include reexam certificates that change page layout)
+                            bare_number = re.sub(r"[A-Z]$", "", candidate.replace("US", ""))
+                            col_line_pdf_url = f"https://patentimages.storage.googleapis.com/pdfs/US{bare_number}.pdf"
+                            try:
+                                pdf_resp = await client.get(col_line_pdf_url)
+                                if pdf_resp.status_code == 200:
+                                    _apply_col_line_locations(data, pdf_resp.content)
+                            except httpx.HTTPError:
+                                pass  # non-fatal
                         _patent_cache[candidate] = data
                         await set_cached(candidate, "patent", asdict(data))
                         return data
