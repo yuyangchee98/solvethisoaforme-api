@@ -990,7 +990,7 @@ async def get_col_lines(publication_number: str):
         return cached
 
     # Fetch PDF and extract col/line data
-    bare_number = re.sub(r"[A-Z]$", "", key.replace("US", ""))
+    bare_number = re.sub(r"[A-Z]\d*$", "", key.replace("US", ""))
     col_line_pdf_url = f"https://patentimages.storage.googleapis.com/pdfs/US{bare_number}.pdf"
     async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
         try:
@@ -1042,7 +1042,7 @@ async def get_patent_pdf(publication_number: str):
     # Not cached — fetch it
     async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
         for candidate in candidates:
-            bare = re.sub(r"[A-Z]$", "", candidate.replace("US", ""))
+            bare = re.sub(r"[A-Z]\d*$", "", candidate.replace("US", ""))
             url = f"https://patentimages.storage.googleapis.com/pdfs/US{bare}.pdf"
             try:
                 resp = await client.get(url)
