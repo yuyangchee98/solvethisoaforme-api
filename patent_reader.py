@@ -1277,8 +1277,10 @@ async def get_reference_numerals(publication_number: str):
 _CLAIM_ELEMENT_SKIP = frozenset(
     "claim claims step steps method system apparatus device "
     "embodiment embodiments example examples means way "
-    "communication service services use case".split()
-)
+    "communication service services use case "
+    # Quantifiers/pronouns that spaCy sometimes parses as standalone noun chunks
+    "each every all some any both none that".split()
+) | {"at least some"}
 
 
 def _extract_claim_elements(data: PatentData) -> dict:
