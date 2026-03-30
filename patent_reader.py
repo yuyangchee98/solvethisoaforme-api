@@ -50,6 +50,7 @@ class PatentParagraph:
     line: int | None = None     # start line number
     end_col: int | None = None  # end column number
     end_line: int | None = None # end line number
+    line_breaks: list[dict] | None = None  # [{offset, col, line}, ...] for selection → col/line mapping
 
 
 @dataclass
@@ -169,6 +170,7 @@ def _patent_data_from_dict(d: dict) -> PatentData:
                         line=p.get("line"),
                         end_col=p.get("end_col"),
                         end_line=p.get("end_line"),
+                        line_breaks=p.get("line_breaks"),
                     )
                     for p in s["paragraphs"]
                 ],
@@ -797,7 +799,53 @@ def _find_col_line_match(
         "start_line": start_line["line"],
         "end_col": end_line["col"],
         "end_line": end_line["line"],
+        "match_start_idx": best_start_idx,
+        "match_end_idx": best_end_idx,
     }, best_end_idx + 1
+
+
+def _compute_line_breaks(
+    para_text: str,
+    pdf_lines: list[dict],
+    start_idx: int,
+    end_idx: int,
+) -> list[dict]:
+    """Compute character offsets in para_text where each PDF line boundary falls.
+
+    For each matched PDF line, finds where its text begins in the paragraph
+    using sequential substring search. Falls back to estimation if not found.
+    """
+    para_lower = para_text.lower()
+    line_breaks: list[dict] = []
+    search_pos = 0
+
+    for i in range(start_idx, end_idx + 1):
+        pdf_line = pdf_lines[i]
+        raw = pdf_line["text"]
+        col = pdf_line["col"]
+        ln = pdf_line["line"]
+
+        found = False
+        for chunk_len in (20, 12, 8, 5):
+            chunk = raw[:chunk_len].strip().lower()
+            if len(chunk) < 3:
+                continue
+            idx = para_lower.find(chunk, search_pos)
+            if idx != -1:
+                line_breaks.append({"offset": idx, "col": col, "line": ln})
+                search_pos = idx + 1
+                found = True
+                break
+
+        if not found:
+            if line_breaks:
+                avg_gap = line_breaks[-1]["offset"] // max(1, len(line_breaks))
+                est = min(search_pos + avg_gap, len(para_text) - 1)
+                line_breaks.append({"offset": est, "col": col, "line": ln})
+            else:
+                line_breaks.append({"offset": 0, "col": col, "line": ln})
+
+    return line_breaks
 
 
 def _apply_col_line_locations(data: PatentData, pdf_bytes: bytes) -> None:
@@ -814,6 +862,10 @@ def _apply_col_line_locations(data: PatentData, pdf_bytes: bytes) -> None:
                 para.line = match["start_line"]
                 para.end_col = match["end_col"]
                 para.end_line = match["end_line"]
+                para.line_breaks = _compute_line_breaks(
+                    para.text, pdf_lines,
+                    match["match_start_idx"], match["match_end_idx"],
+                )
 
 
 # ── Shared fetch + in-memory cache ────────────────────────────────────────
