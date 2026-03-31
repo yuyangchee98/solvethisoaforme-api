@@ -609,6 +609,152 @@ def _col_line_normalize(text: str) -> str:
     return text.strip()
 
 
+def _find_candidates(
+    para_text: str,
+    pdf_lines: list[dict],
+    min_ratio: float = 0.5,
+    max_candidates: int = 10,
+) -> list[dict]:
+    """Find top-K candidate match positions for a paragraph across ALL pdf_lines."""
+    para_norm = _col_line_normalize(para_text)
+    if len(para_norm) < 10:
+        return []
+
+    search_start = para_norm[:60]
+    para_tail = para_norm[-50:]
+
+    # Phase 1: find all start positions above threshold
+    start_candidates = []
+    for i in range(len(pdf_lines)):
+        pl_norm = _col_line_normalize(pdf_lines[i]["text"])
+        compare_len = min(len(search_start), len(pl_norm))
+        if compare_len < 5:
+            continue
+        ratio = SequenceMatcher(
+            None, search_start[:compare_len], pl_norm[:compare_len]
+        ).ratio()
+        if ratio >= min_ratio:
+            start_candidates.append((i, ratio))
+
+    # Keep top candidates by start score
+    start_candidates.sort(key=lambda x: -x[1])
+    start_candidates = start_candidates[:max_candidates]
+
+    # Phase 2: for each start candidate, find the best end position
+    results = []
+    for start_idx, start_score in start_candidates:
+        concat = _col_line_normalize(pdf_lines[start_idx]["text"])
+        best_end_idx = start_idx
+        # Initialize tail score with just the start line
+        concat_tail = concat[-50:]
+        best_tail_score = SequenceMatcher(None, para_tail, concat_tail).ratio()
+
+        est_lines = max(2, len(para_norm) // 40)
+        max_scan = start_idx + est_lines + 15
+
+        for j in range(start_idx + 1, min(max_scan, len(pdf_lines))):
+            if pdf_lines[j]["col"] != pdf_lines[j - 1]["col"]:
+                if best_tail_score > 0.9 and len(concat) >= len(para_norm) * 0.7:
+                    break
+
+            concat += " " + _col_line_normalize(pdf_lines[j]["text"])
+
+            concat_tail = concat[-50:]
+            tail_score = SequenceMatcher(None, para_tail, concat_tail).ratio()
+
+            if tail_score > best_tail_score:
+                best_tail_score = tail_score
+                best_end_idx = j
+
+            if len(concat) > len(para_norm) * 1.5:
+                break
+
+        # Lookahead
+        for k in range(best_end_idx + 1, min(best_end_idx + 3, max_scan, len(pdf_lines))):
+            peek_concat = " ".join(
+                _col_line_normalize(pdf_lines[m]["text"])
+                for m in range(start_idx, k + 1)
+            )
+            peek_tail = peek_concat[-50:]
+            peek_score = SequenceMatcher(None, para_tail, peek_tail).ratio()
+            if peek_score > best_tail_score:
+                best_tail_score = peek_score
+                best_end_idx = k
+            else:
+                break
+
+        results.append({
+            "start_idx": start_idx,
+            "end_idx": best_end_idx,
+            "start_col": pdf_lines[start_idx]["col"],
+            "start_line": pdf_lines[start_idx]["line"],
+            "end_col": pdf_lines[best_end_idx]["col"],
+            "end_line": pdf_lines[best_end_idx]["line"],
+            "start_score": start_score,
+            "end_score": best_tail_score,
+        })
+
+    results.sort(key=lambda x: -x["start_score"])
+    return results
+
+
+def _match_monotonic(
+    para_texts: list[str],
+    pdf_lines: list[dict],
+    max_candidates: int = 10,
+) -> list[dict | None]:
+    """Match paragraphs to PDF lines with monotonic ordering constraint via DP."""
+
+    # Phase 1: find candidates for every paragraph independently
+    all_candidates = []
+    for text in para_texts:
+        candidates = _find_candidates(text, pdf_lines, max_candidates=max_candidates)
+        all_candidates.append(candidates)
+
+    # Phase 2: DP — find globally optimal monotonic assignment
+    N = len(all_candidates)
+
+    entries = []
+    for i in range(N):
+        for j, c in enumerate(all_candidates[i]):
+            entries.append({
+                "start_idx": c["start_idx"],
+                "para": i,
+                "cand": j,
+                "score": c["start_score"],
+                "dp": c["start_score"],
+                "prev": -1,
+            })
+    entries.sort(key=lambda e: (e["start_idx"], e["para"]))
+    M = len(entries)
+
+    for i in range(M):
+        e = entries[i]
+        for k in range(i - 1, -1, -1):
+            p = entries[k]
+            if p["start_idx"] >= e["start_idx"]:
+                continue
+            if p["para"] >= e["para"]:
+                continue
+            val = p["dp"] + e["score"]
+            if val > e["dp"]:
+                e["dp"] = val
+                e["prev"] = k
+
+    # Find best endpoint
+    best_i = max(range(M), key=lambda i: entries[i]["dp"]) if M else 0
+
+    # Trace back
+    chain = {}
+    cur = best_i
+    while cur >= 0:
+        e = entries[cur]
+        chain[e["para"]] = all_candidates[e["para"]][e["cand"]]
+        cur = e["prev"]
+
+    return [chain.get(i) for i in range(N)]
+
+
 def _extract_pdf_lines(pdf_bytes: bytes) -> list[dict]:
     """Extract all text lines with col/line numbers from a patent PDF."""
     import pymupdf
@@ -650,7 +796,7 @@ def _extract_pdf_lines(pdf_bytes: bytes) -> list[dict]:
         marker_indices = set()
         for i, tl in enumerate(text_lines):
             t = tl["text"].replace(",", "").strip()
-            if t.isdigit():
+            if t.isascii() and t.isdigit():
                 num = int(t)
                 if 5 <= num <= 70 and num % 5 == 0:
                     if tl["size"] < 8 and (width * 0.35 < tl["x0"] < width * 0.65):
@@ -706,6 +852,7 @@ def _extract_pdf_lines(pdf_bytes: bytes) -> list[dict]:
                 line_est = round(upper["line_num"] - (upper["y"] - y) * rate)
 
             if line_est is not None:
+                line_est = max(1, line_est)
                 all_lines.append({
                     "col": col_num, "line": line_est, "text": tl["text"],
                     "page": pg_idx + 1, "y": round(y, 1),
@@ -716,98 +863,134 @@ def _extract_pdf_lines(pdf_bytes: bytes) -> list[dict]:
     return all_lines
 
 
-def _find_col_line_match(
-    para_text: str,
-    pdf_lines: list[dict],
-    search_from: int = 0,
-    min_ratio: float = 0.5,
-) -> tuple[dict | None, int]:
-    """Find the col/line range in pdf_lines that best matches a paragraph.
+_VISION_URL = "https://vision.googleapis.com/v1/images:annotate"
 
-    Uses sequential cursor + tail-similarity end detection + lookahead.
-    Returns (match_dict, next_search_from).
-    """
-    para_norm = _col_line_normalize(para_text)
-    if len(para_norm) < 10:
-        return None, search_from
 
-    # Find START — match first ~60 chars
-    search_start = para_norm[:60]
-    best_start_idx = None
-    best_start_score = 0.0
+async def _ocr_and_embed(pdf_bytes: bytes) -> bytes:
+    """OCR each scanned page with Vision API and embed text layer into PDF."""
+    import pymupdf
 
-    for i in range(search_from, len(pdf_lines)):
-        pl_norm = _col_line_normalize(pdf_lines[i]["text"])
-        compare_len = min(len(search_start), len(pl_norm))
-        if compare_len < 5:
-            continue
-        ratio = SequenceMatcher(None, search_start[:compare_len], pl_norm[:compare_len]).ratio()
-        if ratio > best_start_score and ratio >= min_ratio:
-            best_start_score = ratio
-            best_start_idx = i
+    api_key = os.environ["GOOGLE_VISION_API_KEY"]
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    font = pymupdf.Font("helv")
 
-    if best_start_idx is None:
-        return None, search_from
+    total = doc.page_count
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for pg_idx in range(total):
+            page = doc[pg_idx]
+            width = page.rect.width
+            height = page.rect.height
 
-    # Find END — accumulate lines, check tail similarity
-    para_tail = para_norm[-50:]
-    concat = _col_line_normalize(pdf_lines[best_start_idx]["text"])
-    end_idx = best_start_idx
-    best_end_idx = best_start_idx
-    best_tail_score = 0.0
+            # Skip drawing sheets
+            native = page.get_text()
+            if "Sheet" in native and " of " in native:
+                continue
 
-    est_lines = max(2, len(para_norm) // 40)
-    max_scan = best_start_idx + est_lines + 15
+            # Render BEFORE removing text (so the image is intact)
+            pix = page.get_pixmap(dpi=300)
 
-    for j in range(best_start_idx + 1, min(max_scan, len(pdf_lines))):
-        next_norm = _col_line_normalize(pdf_lines[j]["text"])
+            # Remove existing text layer so OCR text doesn't duplicate it
+            if len(native) > 10:
+                for block in page.get_text("dict")["blocks"]:
+                    if block["type"] == 0:
+                        page.add_redact_annot(pymupdf.Rect(block["bbox"]))
+                page.apply_redactions(images=0)
 
-        if pdf_lines[j]["col"] != pdf_lines[j - 1]["col"]:
-            if best_tail_score > 0.7:
-                break
-            # Paragraph spans columns — keep going
+            sx = pix.width / width
+            sy = pix.height / height
 
-        concat += " " + next_norm
-        end_idx = j
+            resp = await client.post(
+                _VISION_URL,
+                params={"key": api_key},
+                json={
+                    "requests": [{
+                        "image": {"content": base64.b64encode(pix.tobytes("png")).decode()},
+                        "features": [{"type": "TEXT_DETECTION"}],
+                    }]
+                },
+            )
 
-        concat_tail = concat[-50:]
-        tail_score = SequenceMatcher(None, para_tail, concat_tail).ratio()
+            anns = resp.json().get("responses", [{}])[0].get("textAnnotations", [])
+            if len(anns) < 2:
+                continue
 
-        if tail_score > best_tail_score:
-            best_tail_score = tail_score
-            best_end_idx = j
+            # Parse words
+            words = []
+            for a in anns[1:]:
+                v = a["boundingPoly"]["vertices"]
+                xs = [p.get("x", 0) for p in v]
+                ys = [p.get("y", 0) for p in v]
+                words.append({
+                    "text": a["description"],
+                    "x": min(xs) / sx, "xr": max(xs) / sx,
+                    "y": min(ys) / sy, "yb": max(ys) / sy,
+                    "h": (max(ys) - min(ys)) / sy,
+                })
 
-        if tail_score > 0.7 and len(concat) >= len(para_norm) * 0.7:
-            break
+            # Find gutter
+            gutter_candidates = []
+            for w in words:
+                t = w["text"].strip().replace(",", "")
+                if t.isascii() and t.isdigit() and len(t) <= 2:
+                    num = int(t)
+                    x_pct = w["x"] / width * 100
+                    if 5 <= num <= 70 and num % 5 == 0 and 40 < x_pct < 60:
+                        gutter_candidates.append(w)
 
-        if len(concat) > len(para_norm) * 1.5:
-            break
+            gutter_x = (
+                sum(w["x"] for w in gutter_candidates) / len(gutter_candidates)
+                if gutter_candidates else width / 2
+            )
 
-    # Lookahead: catch orphaned trailing words (e.g., "detail." alone on its own line)
-    for k in range(best_end_idx + 1, min(best_end_idx + 3, max_scan, len(pdf_lines))):
-        peek_norm = _col_line_normalize(pdf_lines[k]["text"])
-        peek_concat = concat + " " + peek_norm if k > end_idx else \
-            " ".join(_col_line_normalize(pdf_lines[m]["text"]) for m in range(best_start_idx, k + 1))
-        peek_tail = peek_concat[-50:]
-        peek_score = SequenceMatcher(None, para_tail, peek_tail).ratio()
-        if peek_score > best_tail_score:
-            best_tail_score = peek_score
-            best_end_idx = k
-            concat = peek_concat
-        else:
-            break
+            # Group words into lines by y-proximity
+            words.sort(key=lambda w: (w["y"], w["x"]))
+            raw_lines: list[list] = []
+            cur: list = []
+            cy = None
+            for w in words:
+                if cy is None or abs(w["y"] - cy) < 4:
+                    cur.append(w)
+                    cy = cy or w["y"]
+                else:
+                    raw_lines.append(cur)
+                    cur = [w]
+                    cy = w["y"]
+            if cur:
+                raw_lines.append(cur)
 
-    start_line = pdf_lines[best_start_idx]
-    end_line = pdf_lines[best_end_idx]
+            # Split at gutter
+            MARGIN = 10
+            segments = []
+            for raw in raw_lines:
+                left = sorted([w for w in raw if w["xr"] < gutter_x - MARGIN], key=lambda w: w["x"])
+                middle = [w for w in raw if gutter_x - MARGIN <= w["x"] <= gutter_x + MARGIN]
+                right = sorted([w for w in raw if w["x"] > gutter_x + MARGIN], key=lambda w: w["x"])
+                if left:
+                    segments.append(("text", left))
+                for m in middle:
+                    segments.append(("marker", [m]))
+                if right:
+                    segments.append(("text", right))
 
-    return {
-        "start_col": start_line["col"],
-        "start_line": start_line["line"],
-        "end_col": end_line["col"],
-        "end_line": end_line["line"],
-        "match_start_idx": best_start_idx,
-        "match_end_idx": best_end_idx,
-    }, best_end_idx + 1
+            # Insert text layer
+            tw = pymupdf.TextWriter(page.rect)
+            for kind, ws in segments:
+                ws_sorted = sorted(ws, key=lambda w: w["x"])
+                text = " ".join(w["text"] for w in ws_sorted)
+                x = min(w["x"] for w in ws)
+                y_pos = max(w["yb"] for w in ws)
+                h = max(w["h"] for w in ws)
+                fs = min(7, h * 0.7) if kind == "marker" else max(4, h * 0.7)
+                try:
+                    tw.append((x, y_pos), text, font=font, fontsize=fs)
+                except Exception:
+                    pass
+            tw.write_text(page, render_mode=3)
+            logging.info("OCR'd page %d/%d", pg_idx + 1, total)
+
+    result = doc.tobytes()
+    doc.close()
+    return result
 
 
 def _compute_line_breaks(
@@ -859,24 +1042,44 @@ def _compute_line_breaks(
     return line_breaks
 
 
-def _apply_col_line_locations(data: PatentData, pdf_bytes: bytes) -> None:
-    """Assign col/line locations to description paragraphs using PDF extraction."""
+async def _apply_col_line_locations(data: PatentData, pdf_bytes: bytes, patent_key: str) -> None:
+    """Assign col/line locations to description paragraphs using PDF extraction + DP matching."""
     pdf_lines = _extract_pdf_lines(pdf_bytes)
+
     if not pdf_lines:
-        return
-    cursor = 0
-    for section in data.description:
-        for para in section.paragraphs:
-            match, cursor = _find_col_line_match(para.text, pdf_lines, search_from=cursor)
-            if match:
-                para.col = match["start_col"]
-                para.line = match["start_line"]
-                para.end_col = match["end_col"]
-                para.end_line = match["end_line"]
-                para.line_breaks = _compute_line_breaks(
-                    para.text, pdf_lines,
-                    match["match_start_idx"], match["match_end_idx"],
-                )
+        # No text layer — try OCR
+        ocr_bytes = _load_pdf(patent_key + "_ocr")
+        if ocr_bytes:
+            pdf_lines = _extract_pdf_lines(ocr_bytes)
+        else:
+            api_key = os.environ.get("GOOGLE_VISION_API_KEY")
+            if not api_key:
+                return
+            ocr_bytes = await _ocr_and_embed(pdf_bytes)
+            _save_pdf(patent_key + "_ocr", ocr_bytes)
+            pdf_lines = _extract_pdf_lines(ocr_bytes)
+
+        if not pdf_lines:
+            return
+
+    # Collect all paragraphs across sections
+    all_paras = [p for s in data.description for p in s.paragraphs]
+    para_texts = [p.text for p in all_paras]
+
+    # DP monotonic match
+    assignments = _match_monotonic(para_texts, pdf_lines)
+
+    # Apply results
+    for para, match in zip(all_paras, assignments):
+        if match:
+            para.col = match["start_col"]
+            para.line = match["start_line"]
+            para.end_col = match["end_col"]
+            para.end_line = match["end_line"]
+            para.line_breaks = _compute_line_breaks(
+                para.text, pdf_lines,
+                match["start_idx"], match["end_idx"],
+            )
 
 
 # ── Shared fetch + in-memory cache ────────────────────────────────────────
@@ -975,8 +1178,8 @@ async def get_col_lines(publication_number: str):
     if all_paras[0].col is not None:
         return {"description": [asdict(s) for s in data.description]}
 
-    # Check persistent cache
-    cached = await get_cached(key, "col_lines")
+    # Check persistent cache (v2 = DP matcher)
+    cached = await get_cached(key, "col_lines_v2")
     if cached:
         # Patch the in-memory data so subsequent calls are instant
         enriched = _patent_data_from_dict({**asdict(data), "description": cached["description"]})
@@ -989,24 +1192,38 @@ async def get_col_lines(publication_number: str):
                 p_old.line_breaks = p_new.line_breaks
         return cached
 
-    # Fetch PDF and extract col/line data
-    bare_number = re.sub(r"[A-Z]\d*$", "", key.replace("US", ""))
-    col_line_pdf_url = f"https://patentimages.storage.googleapis.com/pdfs/US{bare_number}.pdf"
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-        try:
-            pdf_resp = await client.get(col_line_pdf_url)
-            if pdf_resp.status_code == 200:
-                _save_pdf(key, pdf_resp.content)
-                _apply_col_line_locations(data, pdf_resp.content)
-                result = {"description": [asdict(s) for s in data.description]}
-                await set_cached(key, "col_lines", result)
-                # Update the main patent cache too
-                await set_cached(key, "patent", asdict(data))
-                return result
-        except httpx.HTTPError:
-            pass
+    # Try cached PDF first, then download
+    pdf_bytes = _load_pdf(key)
 
-    return {"description": None}
+    if pdf_bytes is None:
+        bare_number = re.sub(r"[A-Z]\d*$", "", key.replace("US", ""))
+        col_line_pdf_url = f"https://patentimages.storage.googleapis.com/pdfs/US{bare_number}.pdf"
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            try:
+                pdf_resp = await client.get(col_line_pdf_url)
+                if pdf_resp.status_code == 200:
+                    pdf_bytes = pdf_resp.content
+            except httpx.HTTPError:
+                pass
+
+            # Fallback: use citation_pdf_url from patent metadata
+            if pdf_bytes is None and data.pdf_url:
+                try:
+                    pdf_resp = await client.get(data.pdf_url)
+                    if pdf_resp.status_code == 200:
+                        pdf_bytes = pdf_resp.content
+                except httpx.HTTPError:
+                    pass
+
+    if pdf_bytes is None:
+        return {"description": None}
+
+    _save_pdf(key, pdf_bytes)
+    await _apply_col_line_locations(data, pdf_bytes, key)
+    result = {"description": [asdict(s) for s in data.description]}
+    await set_cached(key, "col_lines_v2", result)
+    await set_cached(key, "patent", asdict(data))
+    return result
 
 
 # ── PDF cache ────────────────────────────────────────────────────────────
@@ -1053,6 +1270,19 @@ async def get_patent_pdf(publication_number: str):
                     )
             except httpx.HTTPError:
                 continue
+
+        # Fallback: use citation_pdf_url from patent metadata
+        try:
+            data = await _get_patent_data(publication_number)
+            if data.pdf_url:
+                resp = await client.get(data.pdf_url)
+                if resp.status_code == 200:
+                    _save_pdf(data.patent_number, resp.content)
+                    return FileResponse(
+                        _pdf_cache_path(data.patent_number), media_type="application/pdf"
+                    )
+        except Exception:
+            pass
 
     raise HTTPException(status_code=404, detail="PDF not found")
 
