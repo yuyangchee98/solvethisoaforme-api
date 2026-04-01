@@ -813,13 +813,13 @@ def _extract_pdf_lines(pdf_bytes: bytes) -> list[dict]:
         col1_num = None
         col2_num = None
         for tl in text_lines:
-            if tl["y0"] < 80 and tl["text"].strip().isdigit():
-                num = int(tl["text"].strip())
-                if num < 30:
-                    if tl["x0"] < gutter_x:
-                        col1_num = num
-                    else:
-                        col2_num = num
+            t = tl["text"].strip()
+            if tl["y0"] < 80 and t.isascii() and t.isdigit() and len(t) <= 2:
+                num = int(t)
+                if tl["x0"] < gutter_x:
+                    col1_num = num
+                else:
+                    col2_num = num
 
         # Assign lines to columns with interpolated line numbers
         for i, tl in enumerate(text_lines):
