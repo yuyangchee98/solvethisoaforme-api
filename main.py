@@ -30,6 +30,7 @@ from auth.users import fastapi_users, auth_backend, current_active_user
 from auth.schemas import UserRead, UserCreate, UserUpdate
 from billing.router import router as billing_router
 from patent_reader import router as patent_reader_router
+from annotation_router import router as annotation_router
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:4321")
 
@@ -90,6 +91,9 @@ app.include_router(oa_response_router)
 
 # Patent reader (public, no auth required)
 app.include_router(patent_reader_router)
+
+# Patent annotations (auth required)
+app.include_router(annotation_router)
 
 # Initialize analyzer
 analyzer = ClaimAnalyzer()
