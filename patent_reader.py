@@ -761,6 +761,7 @@ def _extract_pdf_lines(pdf_bytes: bytes) -> list[dict]:
 
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     all_lines = []
+    max_col_seen = 0
 
     for pg_idx in range(len(doc)):
         page = doc[pg_idx]
@@ -820,6 +821,19 @@ def _extract_pdf_lines(pdf_bytes: bytes) -> list[dict]:
                     col1_num = num
                 else:
                     col2_num = num
+
+        # Infer missing column header from the other (left = right - 1, always)
+        if col1_num is None and col2_num is not None:
+            col1_num = col2_num - 1
+        elif col2_num is None and col1_num is not None:
+            col2_num = col1_num + 1
+
+        # Skip appended documents (reexam certs, corrections, etc.)
+        # whose column numbers restart and collide with the original patent.
+        page_max_col = max(col1_num or 0, col2_num or 0)
+        if page_max_col > 0 and page_max_col < max_col_seen:
+            continue
+        max_col_seen = max(max_col_seen, page_max_col)
 
         # Assign lines to columns with interpolated line numbers
         for i, tl in enumerate(text_lines):
