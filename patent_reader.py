@@ -810,17 +810,25 @@ def _extract_pdf_lines(pdf_bytes: bytes) -> list[dict]:
         gutter_x = sum(m["x"] for m in candidate_markers) / len(candidate_markers)
         markers_sorted = sorted(candidate_markers, key=lambda m: m["y"])
 
-        # Detect column numbers from header
+        # Detect column numbers from header and track indices to skip
         col1_num = None
         col2_num = None
-        for tl in text_lines:
+        header_indices = set()
+        for i, tl in enumerate(text_lines):
             t = tl["text"].strip()
             if tl["y0"] < 80 and t.isascii() and t.isdigit() and len(t) <= 2:
                 num = int(t)
+                header_indices.add(i)
                 if tl["x0"] < gutter_x:
                     col1_num = num
                 else:
                     col2_num = num
+
+        # Detect patent number in page header (e.g., "4,558,302", "US 11,500,000 B2")
+        _pat_num_re = re.compile(r"^(US\s*)?[\d,]+(\s*[A-Z]\d*)?\s*[;.]?\s*$")
+        for i, tl in enumerate(text_lines):
+            if tl["y0"] < 60 and _pat_num_re.match(tl["text"].strip()):
+                header_indices.add(i)
 
         # Infer missing column header from the other (left = right - 1, always)
         if col1_num is None and col2_num is not None:
@@ -835,9 +843,11 @@ def _extract_pdf_lines(pdf_bytes: bytes) -> list[dict]:
             continue
         max_col_seen = max(max_col_seen, page_max_col)
 
+        skip_indices = marker_indices | header_indices
+
         # Assign lines to columns with interpolated line numbers
         for i, tl in enumerate(text_lines):
-            if i in marker_indices or tl["y0"] < 75:
+            if i in skip_indices:
                 continue
 
             col_num = col1_num if tl["x0"] < gutter_x else col2_num
