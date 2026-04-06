@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pymupdf
 
+from .amendment_detector import extract_amendment_text, has_amendment_markers
 from .base import BaseDocumentProcessor, ProcessorResult
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,39 @@ class PdfProcessor(BaseDocumentProcessor):
                     pages = ocr_pages
                     total_chars = ocr_total_chars
                     used_ocr = True
+
+                    # Check if OCR text contains amendment markers —
+                    # if so, re-extract with Vision API + line detection
+                    # to properly handle strikethrough/underline formatting
+                    joined_ocr = "\n".join(ocr_pages)
+                    if has_amendment_markers(joined_ocr):
+                        logger.info(
+                            "Amendment markers found in '%s', attempting Vision-based extraction",
+                            file_path.name,
+                        )
+                        try:
+                            amendment_text = extract_amendment_text(doc, ocr_pages=ocr_pages)
+                            if amendment_text:
+                                doc.close()
+                                out_path = output_dir / f"{file_path.stem}.extracted.md"
+                                out_path.write_text(amendment_text, encoding="utf-8")
+                                metadata = {
+                                    "pages": page_count,
+                                    "total_chars": len(amendment_text),
+                                    "ocr": True,
+                                    "amendment_aware": True,
+                                }
+                                return ProcessorResult(
+                                    extracted_text=amendment_text,
+                                    extracted_path=out_path,
+                                    metadata=metadata,
+                                )
+                        except Exception as e:
+                            logger.warning(
+                                "Amendment-aware extraction failed for '%s': %s. "
+                                "Falling back to plain OCR.",
+                                file_path.name, e,
+                            )
                 else:
                     doc.close()
                     return ProcessorResult(
