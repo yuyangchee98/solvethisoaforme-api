@@ -105,6 +105,8 @@ class _SessionWorker:
         self._current_streaming_tool: str = ""  # tool name being streamed
         # Reference to the SDK client for subprocess diagnostics
         self._client: ClaudeSDKClient | None = None
+        # CLI session ID from ResultMessage — used for resume on worker recreation
+        self._cli_session_id: str | None = None
 
     async def start(self) -> None:
         """Start the worker Task and wait until the client is connected."""
@@ -208,6 +210,8 @@ class _SessionWorker:
                 self._turn_event_count = event_count
                 self._last_event_time = time.monotonic()
                 self._last_event_info = _describe_message(msg, self)
+                if isinstance(msg, ResultMessage) and hasattr(msg, "session_id"):
+                    self._cli_session_id = msg.session_id
                 await output_q.put(msg)
 
             log.info("[%s] turn complete events=%d duration=%.1fs", self._sid, event_count, time.monotonic() - t0)
@@ -349,7 +353,9 @@ class AgentClientManager:
             self._locks[session_id] = asyncio.Lock()
         return self._locks[session_id]
 
-    def _build_options(self, workspace: Path, session_id: str = "") -> ClaudeAgentOptions:
+    def _build_options(
+        self, workspace: Path, session_id: str = "", resume: str | None = None,
+    ) -> ClaudeAgentOptions:
         patent_server = create_patent_tools_server(workspace)
         sid = session_id[:8]
 
@@ -370,6 +376,7 @@ class AgentClientManager:
             mcp_servers={"patent-tools": patent_server},
             stderr=_on_stderr,
             max_buffer_size=50 * 1024 * 1024,
+            resume=resume,
         )
 
     async def _get_or_create_worker(
@@ -379,8 +386,10 @@ class AgentClientManager:
         if worker is not None and worker.alive:
             return worker
 
-        # Clean up dead worker if needed
+        # Capture CLI session ID from dead worker before cleanup
+        cli_session_id: str | None = None
         if worker is not None:
+            cli_session_id = worker._cli_session_id
             task = worker._task
             exc = task.exception() if task and task.done() and not task.cancelled() else None
             log.warning(
@@ -391,12 +400,19 @@ class AgentClientManager:
             )
             self._workers.pop(session_id, None)
 
-        options = self._build_options(workspace, session_id)
+        # Fallback: load from SQLite (survives server restarts)
+        if cli_session_id is None:
+            cli_session_id = await self._load_cli_session_id(session_id)
+
+        if cli_session_id:
+            log.warning("[%s] resuming CLI session %s", session_id[:8], cli_session_id)
+
+        options = self._build_options(workspace, session_id, resume=cli_session_id)
         worker = _SessionWorker(session_id, options, workspace)
         await worker.start()
         self._workers[session_id] = worker
         self._last_active[session_id] = time.monotonic()
-        log.warning("Created worker for session %s", session_id)
+        log.warning("Created worker for session %s (resume=%s)", session_id, cli_session_id)
         return worker
 
     async def send_message(
@@ -446,6 +462,25 @@ class AgentClientManager:
         async for msg in worker.send(content):
             yield msg
         self._last_active[session_id] = time.monotonic()
+
+        # Persist CLI session ID so we can resume after worker death / server restart
+        if worker._cli_session_id:
+            try:
+                await self._persist_cli_session_id(session_id, worker._cli_session_id)
+            except Exception:
+                log.warning("[%s] failed to persist CLI session ID", session_id[:8], exc_info=True)
+
+    async def _persist_cli_session_id(self, session_id: str, cli_session_id: str) -> None:
+        """Save CLI session ID to SQLite for resume after server restart."""
+        from sessions.manager import get_session_manager
+        manager = get_session_manager()
+        await manager.save_cli_session_id(session_id, cli_session_id)
+
+    async def _load_cli_session_id(self, session_id: str) -> str | None:
+        """Load CLI session ID from SQLite."""
+        from sessions.manager import get_session_manager
+        manager = get_session_manager()
+        return await manager.get_cli_session_id(session_id)
 
     async def disconnect(self, session_id: str) -> None:
         """Disconnect and fully clean up a session (including its lock)."""

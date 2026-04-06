@@ -174,6 +174,37 @@ class SessionManager:
 
         return True
 
+    async def save_cli_session_id(self, session_id: str, cli_session_id: str) -> None:
+        """Save the CLI subprocess session ID for conversation resume.
+
+        Args:
+            session_id: Our application session ID
+            cli_session_id: The Claude CLI's internal session ID
+        """
+        db = await get_db()
+        await db.execute(
+            "UPDATE sessions SET cli_session_id = ? WHERE id = ?",
+            (cli_session_id, session_id),
+        )
+        await db.commit()
+
+    async def get_cli_session_id(self, session_id: str) -> str | None:
+        """Get the CLI subprocess session ID for conversation resume.
+
+        Args:
+            session_id: Our application session ID
+
+        Returns:
+            The CLI session ID if saved, None otherwise
+        """
+        db = await get_db()
+        cursor = await db.execute(
+            "SELECT cli_session_id FROM sessions WHERE id = ?",
+            (session_id,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
     async def save_message(
         self,
         session_id: str,
