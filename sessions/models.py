@@ -40,6 +40,7 @@ class Session(BaseModel):
     status: SessionStatus = SessionStatus.ACTIVE
     created_at: datetime
     updated_at: datetime
+    kind: str = "oa_response"
 
 
 class ToolCall(BaseModel):

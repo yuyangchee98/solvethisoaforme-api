@@ -25,6 +25,7 @@ from core.analyzer import ClaimAnalyzer, register_default_validators
 from sessions import init_db, close_db
 from oa_response import oa_response_router
 from oa_response.client_manager import get_client_manager
+from reviewer import reviewer_router
 from auth.db import init_auth_db
 from auth.users import fastapi_users, auth_backend, current_active_user
 from auth.schemas import UserRead, UserCreate, UserUpdate
@@ -88,6 +89,9 @@ app.include_router(billing_router)
 
 # Include OA response router
 app.include_router(oa_response_router)
+
+# Include Reviewer router (side-by-side doc reader)
+app.include_router(reviewer_router)
 
 # Patent reader (public, no auth required)
 app.include_router(patent_reader_router)

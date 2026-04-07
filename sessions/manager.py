@@ -26,14 +26,24 @@ _session_manager: "SessionManager | None" = None
 class SessionManager:
     """Manages session lifecycle, messages, and workspace files."""
 
-    # Workspace subdirectories created for each session
+    # Default workspace subdirectories per session kind
     WORKSPACE_DIRS = ["input", "rejections", "prior_art_working"]
+    REVIEWER_WORKSPACE_DIRS = ["strategy", "sources"]
 
-    async def create_session(self, user_id: str | None = None) -> Session:
+    async def create_session(
+        self,
+        user_id: str | None = None,
+        kind: str = "oa_response",
+        subdirs: list[str] | None = None,
+    ) -> Session:
         """Create a new session with workspace directories.
 
         Args:
             user_id: Optional user ID to associate with the session
+            kind: Session kind ('oa_response' or 'reviewer'). Persisted in
+                the session_kind column.
+            subdirs: Explicit list of workspace subdirectories to create.
+                If None, defaults are picked based on `kind`.
 
         Returns:
             The newly created session
@@ -46,10 +56,10 @@ class SessionManager:
         # Insert session record
         await db.execute(
             """
-            INSERT INTO sessions (id, status, created_at, updated_at, user_id)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO sessions (id, status, created_at, updated_at, user_id, session_kind)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (session_id, SessionStatus.ACTIVE.value, now, now, user_id),
+            (session_id, SessionStatus.ACTIVE.value, now, now, user_id, kind),
         )
         await db.commit()
 
@@ -57,7 +67,12 @@ class SessionManager:
         workspace = self.get_workspace_path(session_id)
         workspace.mkdir(parents=True, exist_ok=True)
 
-        for subdir in self.WORKSPACE_DIRS:
+        if subdirs is None:
+            subdirs = (
+                self.REVIEWER_WORKSPACE_DIRS if kind == "reviewer" else self.WORKSPACE_DIRS
+            )
+
+        for subdir in subdirs:
             (workspace / subdir).mkdir(exist_ok=True)
 
         return Session(
@@ -65,6 +80,7 @@ class SessionManager:
             status=SessionStatus.ACTIVE,
             created_at=datetime.fromisoformat(now),
             updated_at=datetime.fromisoformat(now),
+            kind=kind,
         )
 
     async def get_session(
@@ -83,12 +99,12 @@ class SessionManager:
 
         if user_id:
             cursor = await db.execute(
-                "SELECT id, status, created_at, updated_at FROM sessions WHERE id = ? AND user_id = ?",
+                "SELECT id, status, created_at, updated_at, session_kind FROM sessions WHERE id = ? AND user_id = ?",
                 (session_id, user_id),
             )
         else:
             cursor = await db.execute(
-                "SELECT id, status, created_at, updated_at FROM sessions WHERE id = ?",
+                "SELECT id, status, created_at, updated_at, session_kind FROM sessions WHERE id = ?",
                 (session_id,),
             )
         row = await cursor.fetchone()
@@ -101,37 +117,41 @@ class SessionManager:
             status=SessionStatus(row[1]),
             created_at=datetime.fromisoformat(row[2]),
             updated_at=datetime.fromisoformat(row[3]),
+            kind=row[4] or "oa_response",
         )
 
-    async def list_sessions(self, user_id: str | None = None) -> list[Session]:
-        """List sessions, optionally filtered by user.
+    async def list_sessions(
+        self, user_id: str | None = None, kind: str | None = None
+    ) -> list[Session]:
+        """List sessions, optionally filtered by user and/or kind.
 
         Args:
             user_id: If provided, only return sessions for this user
+            kind: If provided, only return sessions with this session_kind
 
         Returns:
             List of sessions ordered by creation date (newest first)
         """
         db = await get_db()
 
+        where_clauses: list[str] = []
+        params: list[str] = []
         if user_id:
-            cursor = await db.execute(
-                """
-                SELECT id, status, created_at, updated_at
-                FROM sessions
-                WHERE user_id = ?
-                ORDER BY created_at DESC
-                """,
-                (user_id,),
-            )
-        else:
-            cursor = await db.execute(
-                """
-                SELECT id, status, created_at, updated_at
-                FROM sessions
-                ORDER BY created_at DESC
-                """
-            )
+            where_clauses.append("user_id = ?")
+            params.append(user_id)
+        if kind:
+            where_clauses.append("session_kind = ?")
+            params.append(kind)
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        query = f"""
+            SELECT id, status, created_at, updated_at, session_kind
+            FROM sessions
+            {where_sql}
+            ORDER BY created_at DESC
+        """
+
+        cursor = await db.execute(query, params)
         rows = await cursor.fetchall()
 
         return [
@@ -140,6 +160,7 @@ class SessionManager:
                 status=SessionStatus(row[1]),
                 created_at=datetime.fromisoformat(row[2]),
                 updated_at=datetime.fromisoformat(row[3]),
+                kind=row[4] or "oa_response",
             )
             for row in rows
         ]
@@ -491,6 +512,45 @@ class SessionManager:
                 )
             )
 
+        return files
+
+    def list_workspace_files_recursive(
+        self, session_id: str
+    ) -> list[WorkspaceFileInfo]:
+        """Recursively list every file in a session's workspace.
+
+        Unlike `list_workspace_files`, this walks the entire workspace tree
+        and returns only regular files (no directories). Used by the reviewer
+        to classify all source documents in one call.
+
+        Args:
+            session_id: The session ID
+
+        Returns:
+            List of files with paths relative to the workspace root
+        """
+        workspace = self.get_workspace_path(session_id)
+        if not workspace.exists() or not workspace.is_dir():
+            return []
+
+        workspace_resolved = workspace.resolve()
+        files: list[WorkspaceFileInfo] = []
+        for item in sorted(workspace.rglob("*")):
+            if not item.is_file():
+                continue
+            # Defense in depth: skip anything outside the workspace
+            try:
+                item.resolve().relative_to(workspace_resolved)
+            except ValueError:
+                continue
+            files.append(
+                WorkspaceFileInfo(
+                    name=item.name,
+                    path=str(item.relative_to(workspace)),
+                    size=item.stat().st_size,
+                    is_directory=False,
+                )
+            )
         return files
 
     def get_workspace_path(self, session_id: str) -> Path:
