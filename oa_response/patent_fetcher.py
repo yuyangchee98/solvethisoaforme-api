@@ -56,9 +56,15 @@ def normalize_publication_number(raw: str) -> list[str]:
     base = f"{country}{number}"
 
     if kind:
+        # For WO patents, also try without kind code (Google Patents often
+        # indexes them as just the base number, e.g. WO2010089455 not WO2010089455A2)
+        if country == "WO":
+            return [f"{base}{kind}", base]
         return [f"{base}{kind}"]
 
     # No kind code provided — try common variants
+    if country == "WO":
+        return [base, f"{base}A1", f"{base}A2", f"{base}A3"]
     return [f"{base}A1", f"{base}B1", f"{base}B2", f"{base}A"]
 
 
