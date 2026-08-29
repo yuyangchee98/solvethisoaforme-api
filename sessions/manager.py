@@ -28,22 +28,20 @@ class SessionManager:
 
     # Default workspace subdirectories per session kind
     WORKSPACE_DIRS = ["input", "rejections", "prior_art_working"]
-    REVIEWER_WORKSPACE_DIRS = ["strategy", "sources"]
 
     async def create_session(
         self,
         user_id: str | None = None,
-        kind: str = "oa_response",
+        kind: str = "oa_agent",
         subdirs: list[str] | None = None,
     ) -> Session:
         """Create a new session with workspace directories.
 
         Args:
             user_id: Optional user ID to associate with the session
-            kind: Session kind ('oa_response' or 'reviewer'). Persisted in
-                the session_kind column.
+            kind: Session kind, persisted in the session_kind column.
             subdirs: Explicit list of workspace subdirectories to create.
-                If None, defaults are picked based on `kind`.
+                Defaults to WORKSPACE_DIRS.
 
         Returns:
             The newly created session
@@ -68,9 +66,7 @@ class SessionManager:
         workspace.mkdir(parents=True, exist_ok=True)
 
         if subdirs is None:
-            subdirs = (
-                self.REVIEWER_WORKSPACE_DIRS if kind == "reviewer" else self.WORKSPACE_DIRS
-            )
+            subdirs = self.WORKSPACE_DIRS
 
         for subdir in subdirs:
             (workspace / subdir).mkdir(exist_ok=True)
@@ -117,7 +113,7 @@ class SessionManager:
             status=SessionStatus(row[1]),
             created_at=datetime.fromisoformat(row[2]),
             updated_at=datetime.fromisoformat(row[3]),
-            kind=row[4] or "oa_response",
+            kind=row[4] or "oa_agent",
         )
 
     async def list_sessions(
@@ -160,7 +156,7 @@ class SessionManager:
                 status=SessionStatus(row[1]),
                 created_at=datetime.fromisoformat(row[2]),
                 updated_at=datetime.fromisoformat(row[3]),
-                kind=row[4] or "oa_response",
+                kind=row[4] or "oa_agent",
             )
             for row in rows
         ]
@@ -514,44 +510,6 @@ class SessionManager:
 
         return files
 
-    def list_workspace_files_recursive(
-        self, session_id: str
-    ) -> list[WorkspaceFileInfo]:
-        """Recursively list every file in a session's workspace.
-
-        Unlike `list_workspace_files`, this walks the entire workspace tree
-        and returns only regular files (no directories). Used by the reviewer
-        to classify all source documents in one call.
-
-        Args:
-            session_id: The session ID
-
-        Returns:
-            List of files with paths relative to the workspace root
-        """
-        workspace = self.get_workspace_path(session_id)
-        if not workspace.exists() or not workspace.is_dir():
-            return []
-
-        workspace_resolved = workspace.resolve()
-        files: list[WorkspaceFileInfo] = []
-        for item in sorted(workspace.rglob("*")):
-            if not item.is_file():
-                continue
-            # Defense in depth: skip anything outside the workspace
-            try:
-                item.resolve().relative_to(workspace_resolved)
-            except ValueError:
-                continue
-            files.append(
-                WorkspaceFileInfo(
-                    name=item.name,
-                    path=str(item.relative_to(workspace)),
-                    size=item.stat().st_size,
-                    is_directory=False,
-                )
-            )
-        return files
 
     def get_workspace_path(self, session_id: str) -> Path:
         """Get the workspace path for a session.

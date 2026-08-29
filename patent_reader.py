@@ -894,7 +894,11 @@ async def _ocr_and_embed(pdf_bytes: bytes) -> bytes:
     """OCR each scanned page with Vision API and embed text layer into PDF."""
     import pymupdf
 
-    api_key = os.environ["GOOGLE_VISION_API_KEY"]
+    api_key = os.environ.get("GOOGLE_VISION_API_KEY")
+    if not api_key:
+        # Callers are expected to check first; this is a guard against a future
+        # caller that forgets, so the failure is explicit rather than a KeyError.
+        raise RuntimeError("GOOGLE_VISION_API_KEY is required for OCR")
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     font = pymupdf.Font("helv")
 

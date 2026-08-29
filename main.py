@@ -23,13 +23,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from models import AnalyzeClaimsRequest, AnalyzeClaimsResponse
 from core.analyzer import ClaimAnalyzer, register_default_validators
 from sessions import init_db, close_db
-from oa_response import oa_response_router
-from oa_response.client_manager import get_client_manager
-from reviewer import reviewer_router
+from oa_agent import oa_agent_router
+from oa_agent.client_manager import get_client_manager
 from auth.db import init_auth_db
 from auth.users import fastapi_users, auth_backend, current_active_user
 from auth.schemas import UserRead, UserCreate, UserUpdate
-from billing.router import router as billing_router
 from patent_reader import router as patent_reader_router
 from annotation_router import router as annotation_router
 
@@ -84,14 +82,8 @@ app.include_router(
     tags=["users"],
 )
 
-# Billing router
-app.include_router(billing_router)
-
 # Include OA response router
-app.include_router(oa_response_router)
-
-# Include Reviewer router (side-by-side doc reader)
-app.include_router(reviewer_router)
+app.include_router(oa_agent_router)
 
 # Patent reader (public, no auth required)
 app.include_router(patent_reader_router)

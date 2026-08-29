@@ -32,16 +32,6 @@ from .orchestrator import stream_agent_response, build_message_content
 from .client_manager import get_client_manager
 
 
-async def require_subscription(user: User = Depends(current_active_user)) -> User:
-    """Dependency that requires an active subscription."""
-    if user.subscription_status not in ("active", "trialing"):
-        raise HTTPException(
-            status_code=403,
-            detail="Active subscription required",
-        )
-    return user
-
-
 # assistant-ui message format
 class MessagePart(BaseModel):
     type: str
@@ -82,7 +72,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
 
-router = APIRouter(prefix="/oa-response", tags=["oa-response"])
+router = APIRouter(prefix="/oa-agent", tags=["oa-agent"])
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -105,7 +95,7 @@ def _sanitize_filename(filename: str) -> str:
 
 
 @router.post("/sessions", response_model=CreateSessionResponse)
-async def create_session(user: User = Depends(require_subscription)):
+async def create_session(user: User = Depends(current_active_user)):
     """Create a new session with workspace directories."""
     manager = get_session_manager()
     session = await manager.create_session(user_id=str(user.id))
@@ -118,7 +108,7 @@ async def create_session(user: User = Depends(require_subscription)):
 
 
 @router.get("/sessions", response_model=SessionListResponse)
-async def list_sessions(user: User = Depends(require_subscription)):
+async def list_sessions(user: User = Depends(current_active_user)):
     """List all sessions for the current user."""
     manager = get_session_manager()
     sessions = await manager.list_sessions(user_id=str(user.id))
@@ -138,7 +128,7 @@ async def list_sessions(user: User = Depends(require_subscription)):
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
-async def get_session(session_id: str, user: User = Depends(require_subscription)):
+async def get_session(session_id: str, user: User = Depends(current_active_user)):
     """Get a specific session."""
     manager = get_session_manager()
     session = await manager.get_session(session_id, user_id=str(user.id))
@@ -156,7 +146,7 @@ async def get_session(session_id: str, user: User = Depends(require_subscription
 
 
 @router.delete("/sessions/{session_id}", response_model=DeleteSessionResponse)
-async def delete_session(session_id: str, user: User = Depends(require_subscription)):
+async def delete_session(session_id: str, user: User = Depends(current_active_user)):
     """Delete a session and its workspace."""
     manager = get_session_manager()
     deleted = await manager.delete_session(session_id, user_id=str(user.id))
@@ -174,7 +164,7 @@ async def delete_session(session_id: str, user: User = Depends(require_subscript
 async def send_message(
     session_id: str,
     request: ChatRequest,
-    user: User = Depends(require_subscription),
+    user: User = Depends(current_active_user),
 ):
     """Send a message to a session using Vercel AI SDK format.
 
@@ -410,7 +400,7 @@ async def send_message(
 
 
 @router.get("/sessions/{session_id}/messages", response_model=MessageListResponse)
-async def get_messages(session_id: str, user: User = Depends(require_subscription)):
+async def get_messages(session_id: str, user: User = Depends(current_active_user)):
     """Get all messages for a session."""
     manager = get_session_manager()
 
@@ -452,7 +442,7 @@ async def get_messages(session_id: str, user: User = Depends(require_subscriptio
 
 @router.get("/sessions/{session_id}/files", response_model=WorkspaceFilesResponse)
 async def list_workspace_files(
-    session_id: str, path: str = "", user: User = Depends(require_subscription)
+    session_id: str, path: str = "", user: User = Depends(current_active_user)
 ):
     """List files in a session's workspace.
 
@@ -477,7 +467,7 @@ async def download_file(
     session_id: str,
     file_path: str,
     format: str | None = None,
-    user: User = Depends(require_subscription),
+    user: User = Depends(current_active_user),
 ):
     """Download a file from the session workspace.
 

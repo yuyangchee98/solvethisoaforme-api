@@ -23,9 +23,10 @@ _SUBAGENT_DESCRIPTIONS: dict[str, str] = {
     ),
 }
 
+# Bash is deliberately excluded — see the note in client_manager._build_options.
 _SUBAGENT_TOOLS: dict[str, list[str]] = {
-    "prior-art": ["Read", "Grep", "Glob", "Bash", "Write"],
-    "general-rejection": ["Read", "Grep", "Glob", "Bash", "Write"],
+    "prior-art": ["Read", "Grep", "Glob", "Write"],
+    "general-rejection": ["Read", "Grep", "Glob", "Write"],
 }
 
 _SUBAGENT_MODELS: dict[str, str] = {

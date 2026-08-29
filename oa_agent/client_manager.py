@@ -365,8 +365,13 @@ class AgentClientManager:
         return ClaudeAgentOptions(
             system_prompt=get_orchestrator_prompt(workspace),
             cwd=str(workspace),
+            # Bash is deliberately NOT granted. The workspace guard below can only
+            # enforce boundaries on tools with a parseable path field; a free-form
+            # shell command can escape the session workspace in ways a denylist
+            # cannot reliably catch. Nothing in the prompts asks for Bash — file
+            # access is covered by Read/Write/Grep/Glob.
             allowed_tools=[
-                "Read", "Write", "Grep", "Glob", "Bash", "Task",
+                "Read", "Write", "Grep", "Glob", "Task",
                 "mcp__patent-tools__FetchPatent",
             ],
             permission_mode="acceptEdits",
