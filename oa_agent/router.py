@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Literal
@@ -94,6 +95,12 @@ def _sanitize_filename(filename: str) -> str:
     return filename
 
 
+@router.get("/config")
+async def get_config():
+    """Deployment config the frontend needs before sending messages."""
+    return {"byok_required": not bool(os.environ.get("ANTHROPIC_API_KEY"))}
+
+
 @router.post("/sessions", response_model=CreateSessionResponse)
 async def create_session(user: User = Depends(current_active_user)):
     """Create a new session with workspace directories."""
@@ -164,6 +171,7 @@ async def delete_session(session_id: str, user: User = Depends(current_active_us
 async def send_message(
     session_id: str,
     request: ChatRequest,
+    http_request: Request,
     user: User = Depends(current_active_user),
 ):
     """Send a message to a session using Vercel AI SDK format.
@@ -188,6 +196,19 @@ async def send_message(
     session = await manager.get_session(session_id, user_id=str(user.id))
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    # BYOK: the user's Anthropic key rides a header and is threaded into the
+    # agent subprocess env. Preflight here — without any key the CLI would
+    # only fail with an opaque auth error mid-SSE-stream.
+    api_key = http_request.headers.get("x-anthropic-api-key") or None
+    if not api_key and not os.environ.get("ANTHROPIC_API_KEY"):
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "anthropic_key_required",
+                "message": "Add your Anthropic API key in Settings.",
+            },
+        )
 
     # Extract the last user message content
     user_messages = [m for m in request.messages if m.role == "user"]
@@ -314,7 +335,7 @@ async def send_message(
         try:
             message_content = build_message_content(agent_content, uploaded_files)
             client_manager = get_client_manager()
-            async for event in stream_agent_response(client_manager, session_id, workspace, message_content):
+            async for event in stream_agent_response(client_manager, session_id, workspace, message_content, api_key=api_key):
                 event_type = event.get("type")
 
                 # Accumulate text for saving

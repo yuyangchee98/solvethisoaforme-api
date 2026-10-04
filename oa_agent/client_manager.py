@@ -11,6 +11,7 @@ HTTP request handlers communicate with the worker via asyncio Queues.
 
 import asyncio
 import dataclasses
+import hashlib
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -84,11 +85,20 @@ class _SessionWorker:
     HTTP handlers interact via asyncio Queues.
     """
 
-    def __init__(self, session_id: str, options: ClaudeAgentOptions, workspace: Path) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        options: ClaudeAgentOptions,
+        workspace: Path,
+        key_fp: str | None = None,
+    ) -> None:
         self._session_id = session_id
         self._sid = session_id[:8]
         self._options = options
         self._workspace = workspace
+        # Fingerprint of the BYOK API key baked into options.env (never the
+        # raw key) — lets the manager detect a key change and recreate us.
+        self._key_fp = key_fp
         # Input: (content, output_queue) pairs, or None to shutdown
         self._input: asyncio.Queue[tuple[str | list[dict], asyncio.Queue] | None] = (
             asyncio.Queue()
@@ -354,7 +364,11 @@ class AgentClientManager:
         return self._locks[session_id]
 
     def _build_options(
-        self, workspace: Path, session_id: str = "", resume: str | None = None,
+        self,
+        workspace: Path,
+        session_id: str = "",
+        resume: str | None = None,
+        api_key: str | None = None,
     ) -> ClaudeAgentOptions:
         patent_server = create_patent_tools_server(workspace)
         sid = session_id[:8]
@@ -382,17 +396,31 @@ class AgentClientManager:
             stderr=_on_stderr,
             max_buffer_size=50 * 1024 * 1024,
             resume=resume,
+            # BYOK: merged over the subprocess env, so a user key overrides
+            # any server-level ANTHROPIC_API_KEY; empty dict falls back to it.
+            env={"ANTHROPIC_API_KEY": api_key} if api_key else {},
         )
 
     async def _get_or_create_worker(
-        self, session_id: str, workspace: Path
+        self, session_id: str, workspace: Path, api_key: str | None = None
     ) -> _SessionWorker:
+        key_fp = (
+            hashlib.sha256(api_key.encode()).hexdigest()[:12] if api_key else None
+        )
         worker = self._workers.get(session_id)
         if worker is not None and worker.alive:
-            return worker
+            if worker._key_fp == key_fp:
+                return worker
+            # BYOK key changed mid-session: the key is baked into the CLI
+            # subprocess env, so restart the worker (resuming the CLI session).
+            log.warning("[%s] API key changed, recreating worker", session_id[:8])
+            cli_session_id = worker._cli_session_id
+            await self._force_disconnect(session_id)
+            worker = None
+        else:
+            cli_session_id = None
 
         # Capture CLI session ID from dead worker before cleanup
-        cli_session_id: str | None = None
         if worker is not None:
             cli_session_id = worker._cli_session_id
             task = worker._task
@@ -412,8 +440,10 @@ class AgentClientManager:
         if cli_session_id:
             log.warning("[%s] resuming CLI session %s", session_id[:8], cli_session_id)
 
-        options = self._build_options(workspace, session_id, resume=cli_session_id)
-        worker = _SessionWorker(session_id, options, workspace)
+        options = self._build_options(
+            workspace, session_id, resume=cli_session_id, api_key=api_key
+        )
+        worker = _SessionWorker(session_id, options, workspace, key_fp=key_fp)
         await worker.start()
         self._workers[session_id] = worker
         self._last_active[session_id] = time.monotonic()
@@ -425,6 +455,7 @@ class AgentClientManager:
         session_id: str,
         workspace: Path,
         content: str | list[dict],
+        api_key: str | None = None,
     ) -> AsyncIterator[Message | dict]:
         """Send a message and yield response messages (or synthetic hook dicts).
 
@@ -434,7 +465,7 @@ class AgentClientManager:
         lock = self._get_lock(session_id)
         async with lock:
             try:
-                async for msg in self._do_send(session_id, workspace, content):
+                async for msg in self._do_send(session_id, workspace, content, api_key):
                     yield msg
             except CLIConnectionError:
                 log.warning(
@@ -444,7 +475,7 @@ class AgentClientManager:
                 )
                 await self._force_disconnect(session_id)
                 try:
-                    async for msg in self._do_send(session_id, workspace, content):
+                    async for msg in self._do_send(session_id, workspace, content, api_key):
                         yield msg
                 except CLIConnectionError:
                     log.error(
@@ -459,9 +490,10 @@ class AgentClientManager:
         session_id: str,
         workspace: Path,
         content: str | list[dict],
+        api_key: str | None = None,
     ) -> AsyncIterator[Message | dict]:
         """Send content to client and yield messages until ResultMessage."""
-        worker = await self._get_or_create_worker(session_id, workspace)
+        worker = await self._get_or_create_worker(session_id, workspace, api_key)
         self._last_active[session_id] = time.monotonic()
 
         async for msg in worker.send(content):

@@ -1,6 +1,6 @@
 """Analyze claim dependencies and collect inherited terms."""
 
-from core.nlp_models import nlp
+from core.nlp_models import get_nlp
 from models.requests import ParsedClaim
 from extractors.noun_phrase_extractor import extract_noun_phrases
 
@@ -14,7 +14,7 @@ def get_introductions_from_text(text: str) -> set[str]:
     Returns:
         Set of introduced term strings (lowercase)
     """
-    doc = nlp(text)
+    doc = get_nlp()(text)
     nps = extract_noun_phrases(doc)
 
     terms = set()

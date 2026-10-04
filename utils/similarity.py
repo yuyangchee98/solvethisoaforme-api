@@ -1,6 +1,6 @@
 """Similarity utilities for finding closest matches."""
 
-from core.nlp_models import nlp_vectors
+from core.nlp_models import get_nlp_vectors
 
 
 def find_closest_match(term: str, candidates: set[str], threshold: float = 0.5) -> tuple[str | None, float | None]:
@@ -17,6 +17,7 @@ def find_closest_match(term: str, candidates: set[str], threshold: float = 0.5) 
     if not candidates:
         return None, None
 
+    nlp_vectors = get_nlp_vectors()
     term_doc = nlp_vectors(term)
     best_match = None
     best_score = 0.0

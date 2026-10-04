@@ -119,6 +119,7 @@ async def stream_agent_response(
     session_id: str,
     workspace: Path,
     message_content: str | list[dict],
+    api_key: str | None = None,
 ) -> AsyncIterator[dict]:
     """Send message via persistent client, yield UI stream events.
 
@@ -148,7 +149,7 @@ async def stream_agent_response(
     tool_calls_dispatched: list[str] = []
 
     try:
-        async for message in client_manager.send_message(session_id, workspace, message_content):
+        async for message in client_manager.send_message(session_id, workspace, message_content, api_key=api_key):
             # Synthetic events injected by hooks (not SDK Message objects)
             if isinstance(message, dict) and message.get("_synthetic") == "compaction":
                 if text_started:

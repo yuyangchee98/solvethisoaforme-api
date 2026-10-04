@@ -1,6 +1,6 @@
 """Core claim analyzer orchestrating the validation pipeline."""
 
-from core.nlp_models import nlp
+from core.nlp_models import get_nlp
 from core.registry import get_registry
 from models.requests import ParsedClaim
 from models.responses import ClaimAnalysis
@@ -39,7 +39,7 @@ class ClaimAnalyzer:
         analyses = []
 
         for claim in claims:
-            doc = nlp(claim.text)
+            doc = get_nlp()(claim.text)
             nps = extract_noun_phrases(doc)
 
             # Get inherited terms from ancestors

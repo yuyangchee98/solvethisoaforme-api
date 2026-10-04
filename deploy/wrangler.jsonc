@@ -1,0 +1,47 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "solvethisoaforme-api",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-09-01",
+	"containers": [
+		{
+			"class_name": "ApiContainer",
+			// Build context is api/ (the Dockerfile's directory)
+			"image": "../Dockerfile",
+			"max_instances": 1,
+			// Lazy spaCy keeps idle RSS low; first /analyze-claims peaks ~2 GiB,
+			// plus one `claude` node subprocess per active agent session.
+			"instance_type": {
+				"vcpu": 1,
+				"memory_mib": 4096,
+				"disk_mb": 10240
+			}
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "API_CONTAINER",
+				"class_name": "ApiContainer"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["ApiContainer"]
+		}
+	],
+	"vars": {
+		"FRONTEND_URL": "https://solvethisoaforme.chyuang.com"
+	},
+	"routes": [
+		{
+			"pattern": "oa-api.chyuang.com",
+			"custom_domain": true
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+}

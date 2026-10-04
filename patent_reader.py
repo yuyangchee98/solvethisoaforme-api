@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup, Tag
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from core.nlp_models import nlp as spacy_nlp
+from core.nlp_models import get_nlp
 from patent_cache import get_cached, set_cached
 
 logger = logging.getLogger(__name__)
@@ -1256,7 +1256,7 @@ async def get_col_lines(publication_number: str):
 
 # ── PDF cache ────────────────────────────────────────────────────────────
 
-_PDF_CACHE_DIR = Path(__file__).parent / "data" / "pdfs"
+_PDF_CACHE_DIR = Path(os.environ.get("DATA_PATH", "./data")) / "pdfs"
 _PDF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -1358,7 +1358,7 @@ def _build_exclusion_zones(text: str):
     figure enumeration continuations — positions where a number is NOT a
     reference numeral.
     """
-    doc = spacy_nlp(text)
+    doc = get_nlp()(text)
     _EXCLUDE_LABELS = {"DATE", "QUANTITY", "TIME", "PERCENT"}
     zones = [(ent.start_char, ent.end_char) for ent in doc.ents if ent.label_ in _EXCLUDE_LABELS]
     zones.extend(_build_fig_exclusion_zones(text))
@@ -1558,7 +1558,7 @@ def _extract_claim_elements(data: PatentData) -> dict:
     group_counter = 0
 
     for claim in data.claims:
-        doc = spacy_nlp(claim.text)
+        doc = get_nlp()(claim.text)
         nps = []
 
         for chunk in doc.noun_chunks:

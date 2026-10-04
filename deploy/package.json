@@ -1,0 +1,16 @@
+{
+	"name": "solvethisoaforme-api-deploy",
+	"private": true,
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy": "wrangler deploy"
+	},
+	"dependencies": {
+		"@cloudflare/containers": "^0.3.7"
+	},
+	"devDependencies": {
+		"typescript": "^5.5.0",
+		"wrangler": "^4.136.0",
+		"@cloudflare/workers-types": "^5.20260923.0"
+	}
+}

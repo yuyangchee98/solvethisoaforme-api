@@ -18,11 +18,21 @@ dependencies = [
     "httpx>=0.27.0",
     "beautifulsoup4>=4.12.0",
     "pymupdf>=1.24.0",
+    # Direct dependency only so [tool.uv.sources] can pin it to CPU wheels
+    # on linux (uv sources don't apply to transitive dependencies).
+    "torch>=2.0",
 ]
 
 [tool.uv]
 dev-dependencies = []
 
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.uv.sources]
 en-core-web-trf = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl" }
 en-core-web-md = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl" }
+# CUDA torch wheels are multi-GB; the container only ever runs CPU inference.
+torch = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
